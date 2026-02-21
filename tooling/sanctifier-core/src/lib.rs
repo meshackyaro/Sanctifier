@@ -3,6 +3,7 @@ use syn::{parse_str, File, Item, Type, Fields, Meta, ExprMethodCall, Macro};
 use syn::visit::{self, Visit};
 use syn::spanned::Spanned;
 use serde::Serialize;
+use std::collections::HashSet;
 use thiserror::Error;
 
 // ── Existing types ────────────────────────────────────────────────────────────
@@ -395,10 +396,9 @@ struct UnsafeVisitor {
 }
 
 impl<'ast> Visit<'ast> for UnsafeVisitor {
-    fn visit_expr_macro(&mut self, node: &'ast syn::ExprMacro) {
-        if node.mac.path.is_ident("panic") {
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        if node.path.is_ident("panic") {
             let line = node
-                .mac
                 .path
                 .get_ident()
                 .map(|i| i.span().start().line)
@@ -409,7 +409,7 @@ impl<'ast> Visit<'ast> for UnsafeVisitor {
                 snippet: "panic!()".to_string(),
             });
         }
-        visit::visit_expr_macro(self, node);
+        visit::visit_macro(self, node);
     }
 
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
