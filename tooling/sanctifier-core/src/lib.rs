@@ -2,6 +2,7 @@ use soroban_sdk::Env;
 use syn::{parse_str, File, Item, Type, Fields, Meta, ExprMethodCall, Macro};
 use syn::visit::{self, Visit};
 use syn::spanned::Spanned;
+use serde::{Serialize, Deserialize};
 use serde::Serialize;
 use std::collections::HashSet;
 use thiserror::Error;
@@ -53,19 +54,41 @@ pub struct ArithmeticIssue {
     pub location: String,
 }
 
+// ── Configuration ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SanctifyConfig {
+    pub ignore_paths: Vec<String>,
+    pub enabled_rules: Vec<String>,
+    pub ledger_limit: usize,
+    pub strict_mode: bool,
+}
+
+impl Default for SanctifyConfig {
+    fn default() -> Self {
+        Self {
+            ignore_paths: vec!["target".to_string(), ".git".to_string()],
+            enabled_rules: vec![
+                "auth_gaps".to_string(),
+                "panics".to_string(),
+                "arithmetic".to_string(),
+                "ledger_size".to_string(),
+            ],
+            ledger_limit: 64000,
+            strict_mode: false,
+        }
+    }
+}
+
 // ── Analyzer ──────────────────────────────────────────────────────────────────
 
 pub struct Analyzer {
-    pub strict_mode: bool,
-    pub ledger_limit: usize,
+    pub config: SanctifyConfig,
 }
 
 impl Analyzer {
-    pub fn new(strict_mode: bool) -> Self {
-        Self {
-            strict_mode,
-            ledger_limit: 64000, // Default 64 KB warning threshold
-        }
+    pub fn new(config: SanctifyConfig) -> Self {
+        Self { config }
     }
 
     pub fn scan_auth_gaps(&self, source: &str) -> Vec<String> {
@@ -282,18 +305,22 @@ impl Analyzer {
             match item {
                 Item::Struct(s) => {
                     let has_contracttype = s.attrs.iter().any(|attr| {
-                        matches!(&attr.meta, Meta::Path(path) if path.is_ident("contracttype"))
+                        if let Meta::Path(path) = &attr.meta {
+                            path.is_ident("contracttype") || path.segments.iter().any(|s| s.ident == "contracttype")
+                        } else {
+                            false
+                        }
                     });
 
                     if has_contracttype {
                         let size = self.estimate_struct_size(&s);
-                        if size > self.ledger_limit
-                            || (self.strict_mode && size > self.ledger_limit / 2)
+                        if size > self.config.ledger_limit
+                            || (self.config.strict_mode && size > self.config.ledger_limit / 2)
                         {
                             warnings.push(SizeWarning {
                                 struct_name: s.ident.to_string(),
                                 estimated_size: size,
-                                limit: self.ledger_limit,
+                                limit: self.config.ledger_limit,
                             });
                         }
                     }
@@ -544,7 +571,7 @@ mod tests {
 
     #[test]
     fn test_analyze_with_macros() {
-        let analyzer = Analyzer::new(false);
+        let analyzer = Analyzer::new(SanctifyConfig::default());
         let source = r#"
             use soroban_sdk::{contract, contractimpl, Env};
 
@@ -574,8 +601,9 @@ mod tests {
 
     #[test]
     fn test_analyze_with_limit() {
-        let mut analyzer = Analyzer::new(false);
-        analyzer.ledger_limit = 50;
+        let mut config = SanctifyConfig::default();
+        config.ledger_limit = 50;
+        let analyzer = Analyzer::new(config);
         let source = r#"
             #[contracttype]
             pub struct ExceedsLimit {
@@ -590,7 +618,7 @@ mod tests {
 
     #[test]
     fn test_complex_macro_no_panic() {
-        let analyzer = Analyzer::new(false);
+        let analyzer = Analyzer::new(SanctifyConfig::default());
         let source = r#"
             macro_rules! complex {
                 ($($t:tt)*) => { $($t)* };
@@ -615,7 +643,7 @@ mod tests {
 
     #[test]
     fn test_scan_auth_gaps() {
-        let analyzer = Analyzer::new(false);
+        let analyzer = Analyzer::new(SanctifyConfig::default());
         let source = r#"
             #[contractimpl]
             impl MyContract {
@@ -644,7 +672,7 @@ mod tests {
 
     #[test]
     fn test_scan_panics() {
-        let analyzer = Analyzer::new(false);
+        let analyzer = Analyzer::new(SanctifyConfig::default());
         let source = r#"
             #[contractimpl]
             impl MyContract {
@@ -680,7 +708,7 @@ mod tests {
 
     #[test]
     fn test_scan_arithmetic_overflow_basic() {
-        let analyzer = Analyzer::new(false);
+        let analyzer = Analyzer::new(SanctifyConfig::default());
         let source = r#"
             #[contractimpl]
             impl MyContract {
@@ -716,7 +744,7 @@ mod tests {
 
     #[test]
     fn test_scan_arithmetic_overflow_compound_assign() {
-        let analyzer = Analyzer::new(false);
+        let analyzer = Analyzer::new(SanctifyConfig::default());
         let source = r#"
             #[contractimpl]
             impl Token {
@@ -739,7 +767,7 @@ mod tests {
 
     #[test]
     fn test_scan_arithmetic_overflow_deduplication() {
-        let analyzer = Analyzer::new(false);
+        let analyzer = Analyzer::new(SanctifyConfig::default());
         let source = r#"
             #[contractimpl]
             impl MyContract {
@@ -757,7 +785,7 @@ mod tests {
 
     #[test]
     fn test_scan_arithmetic_overflow_no_false_positive_safe_code() {
-        let analyzer = Analyzer::new(false);
+        let analyzer = Analyzer::new(SanctifyConfig::default());
         let source = r#"
             #[contractimpl]
             impl MyContract {
@@ -776,7 +804,7 @@ mod tests {
 
     #[test]
     fn test_scan_arithmetic_overflow_custom_wrapper_types() {
-        let analyzer = Analyzer::new(false);
+        let analyzer = Analyzer::new(SanctifyConfig::default());
         // Custom type wrapping a primitive — arithmetic on it is still flagged
         let source = r#"
             #[contractimpl]
@@ -793,7 +821,7 @@ mod tests {
 
     #[test]
     fn test_scan_arithmetic_overflow_suggestion_content() {
-        let analyzer = Analyzer::new(false);
+        let analyzer = Analyzer::new(SanctifyConfig::default());
         let source = r#"
             #[contractimpl]
             impl MyContract {
