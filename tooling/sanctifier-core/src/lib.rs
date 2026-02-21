@@ -1,10 +1,13 @@
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::panic::{self, AssertUnwindSafe};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{parse_str, Fields, File, Item, Meta, Type};
 
 use soroban_sdk::Env;
+use thiserror::Error;
 
 // ── Existing types ────────────────────────────────────────────────────────────
 
@@ -127,26 +130,60 @@ pub struct ArithmeticIssue {
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
+/// User-defined regex-based rule. Defined in .sanctify.toml under [[custom_rules]].
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CustomRule {
+    pub name: String,
+    pub pattern: String,
+}
+
+/// A match from a custom regex rule.
+#[derive(Debug, Serialize, Clone)]
+pub struct CustomRuleMatch {
+    pub rule_name: String,
+    pub line: usize,
+    pub snippet: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SanctifyConfig {
+    #[serde(default = "default_ignore_paths")]
     pub ignore_paths: Vec<String>,
+    #[serde(default = "default_enabled_rules")]
     pub enabled_rules: Vec<String>,
+    #[serde(default = "default_ledger_limit")]
     pub ledger_limit: usize,
+    #[serde(default)]
     pub strict_mode: bool,
+    #[serde(default)]
+    pub custom_rules: Vec<CustomRule>,
+}
+
+fn default_ignore_paths() -> Vec<String> {
+    vec!["target".to_string(), ".git".to_string()]
+}
+
+fn default_enabled_rules() -> Vec<String> {
+    vec![
+        "auth_gaps".to_string(),
+        "panics".to_string(),
+        "arithmetic".to_string(),
+        "ledger_size".to_string(),
+    ]
+}
+
+fn default_ledger_limit() -> usize {
+    64000
 }
 
 impl Default for SanctifyConfig {
     fn default() -> Self {
         Self {
-            ignore_paths: vec!["target".to_string(), ".git".to_string()],
-            enabled_rules: vec![
-                "auth_gaps".to_string(),
-                "panics".to_string(),
-                "arithmetic".to_string(),
-                "ledger_size".to_string(),
-            ],
-            ledger_limit: 64000,
+            ignore_paths: default_ignore_paths(),
+            enabled_rules: default_enabled_rules(),
+            ledger_limit: default_ledger_limit(),
             strict_mode: false,
+            custom_rules: vec![],
         }
     }
 }
@@ -163,6 +200,10 @@ impl Analyzer {
     }
 
     pub fn scan_auth_gaps(&self, source: &str) -> Vec<String> {
+        with_panic_guard(|| self.scan_auth_gaps_impl(source))
+    }
+
+    fn scan_auth_gaps_impl(&self, source: &str) -> Vec<String> {
         let file = match parse_str::<File>(source) {
             Ok(f) => f,
             Err(_) => return vec![],
@@ -174,28 +215,13 @@ impl Analyzer {
             if let Item::Impl(i) = item {
                 for impl_item in &i.items {
                     if let syn::ImplItem::Fn(f) = impl_item {
-                        let fn_name = f.sig.ident.to_string();
-                        let mut has_mutation = false;
-                        let mut has_auth = false;
-                        self.check_fn_body(&f.block, &mut has_mutation, &mut has_auth);
-                        if has_mutation && !has_auth {
-                            gaps.push(fn_name);
-                        }
-                    }
-                }
-            }
-        }
-
-        for item in &file.items {
-            if let Item::Impl(i) = item {
-                for impl_item in &i.items {
-                    if let syn::ImplItem::Fn(f) = impl_item {
                         if let syn::Visibility::Public(_) = f.vis {
+                            let fn_name = f.sig.ident.to_string();
                             let mut has_mutation = false;
                             let mut has_auth = false;
                             self.check_fn_body(&f.block, &mut has_mutation, &mut has_auth);
                             if has_mutation && !has_auth {
-                                gaps.push(f.sig.ident.to_string());
+                                gaps.push(fn_name);
                             }
                         }
                     }
@@ -210,14 +236,17 @@ impl Analyzer {
     /// Returns all `panic!`, `.unwrap()`, and `.expect()` calls found inside
     /// contract impl functions. Prefer returning `Result` instead.
     pub fn scan_panics(&self, source: &str) -> Vec<PanicIssue> {
+        with_panic_guard(|| self.scan_panics_impl(source))
+    }
+
+    fn scan_panics_impl(&self, source: &str) -> Vec<PanicIssue> {
         let file = match parse_str::<File>(source) {
             Ok(f) => f,
             Err(_) => return vec![],
         };
 
         let mut issues = Vec::new();
-
-        for item in file.items {
+        for item in &file.items {
             if let Item::Impl(i) = item {
                 for impl_item in &i.items {
                     if let syn::ImplItem::Fn(f) = impl_item {
@@ -386,14 +415,17 @@ impl Analyzer {
     /// Warns about `#[contracttype]` structs whose estimated size exceeds the
     /// ledger entry limit.
     pub fn analyze_ledger_size(&self, source: &str) -> Vec<SizeWarning> {
+        with_panic_guard(|| self.analyze_ledger_size_impl(source))
+    }
+
+    fn analyze_ledger_size_impl(&self, source: &str) -> Vec<SizeWarning> {
         let file = match parse_str::<File>(source) {
             Ok(f) => f,
             Err(_) => return vec![],
         };
 
         let mut warnings = Vec::new();
-
-        for item in file.items {
+        for item in &file.items {
             match item {
                 Item::Struct(s) => {
                     let has_contracttype = s.attrs.iter().any(|attr| {
@@ -430,6 +462,10 @@ impl Analyzer {
     /// Visitor-based scan for `panic!`, `.unwrap()`, `.expect()` with line
     /// numbers derived from proc-macro2 span locations.
     pub fn analyze_unsafe_patterns(&self, source: &str) -> Vec<UnsafePattern> {
+        with_panic_guard(|| self.analyze_unsafe_patterns_impl(source))
+    }
+
+    fn analyze_unsafe_patterns_impl(&self, source: &str) -> Vec<UnsafePattern> {
         let file = match parse_str::<File>(source) {
             Ok(f) => f,
             Err(_) => return vec![],
@@ -452,6 +488,10 @@ impl Analyzer {
     /// actionable. Line numbers are included when span-location info is
     /// available (requires `proc-macro2` with `span-locations` feature).
     pub fn scan_arithmetic_overflow(&self, source: &str) -> Vec<ArithmeticIssue> {
+        with_panic_guard(|| self.scan_arithmetic_overflow_impl(source))
+    }
+
+    fn scan_arithmetic_overflow_impl(&self, source: &str) -> Vec<ArithmeticIssue> {
         let file = match parse_str::<File>(source) {
             Ok(f) => f,
             Err(_) => return vec![],
@@ -466,121 +506,28 @@ impl Analyzer {
         visitor.issues
     }
 
-    // ── Upgrade pattern analysis ──────────────────────────────────────────────
+    /// Run regex-based custom rules from config. Returns matches with line and snippet.
+    pub fn analyze_custom_rules(&self, source: &str, rules: &[CustomRule]) -> Vec<CustomRuleMatch> {
+        use regex::Regex;
 
-    /// Analyzes contracts for upgrade mechanisms, init patterns, storage layout
-    /// visibility, and governance (auth on privileged functions).
-    pub fn analyze_upgrade_patterns(&self, source: &str) -> UpgradeReport {
-        let file = match parse_str::<File>(source) {
-            Ok(f) => f,
-            Err(_) => return UpgradeReport::empty(),
-        };
-
-        let mut report = UpgradeReport {
-            findings: Vec::new(),
-            upgrade_mechanisms: Vec::new(),
-            init_functions: Vec::new(),
-            storage_types: Vec::new(),
-            suggestions: Vec::new(),
-        };
-
-        // Collect #[contracttype] storage types
-        for item in &file.items {
-            if let Item::Struct(s) = item {
-                if has_attr(&s.attrs, "contracttype") {
-                    report.storage_types.push(s.ident.to_string());
-                }
-            }
-            if let Item::Enum(e) = item {
-                if has_attr(&e.attrs, "contracttype") {
-                    report.storage_types.push(e.ident.to_string());
+        let mut matches = Vec::new();
+        for rule in rules {
+            let re = match Regex::new(&rule.pattern) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            for (line_no, line) in source.lines().enumerate() {
+                let line_num = line_no + 1;
+                if re.find(line).is_some() {
+                    matches.push(CustomRuleMatch {
+                        rule_name: rule.name.clone(),
+                        line: line_num,
+                        snippet: line.trim().to_string(),
+                    });
                 }
             }
         }
-
-        // Walk impl blocks for upgrade-related functions
-        for item in &file.items {
-            if let Item::Impl(impl_block) = item {
-                for impl_item in &impl_block.items {
-                    if let syn::ImplItem::Fn(f) = impl_item {
-                        let fn_name = f.sig.ident.to_string();
-                        let line = f.sig.ident.span().start().line;
-                        let location = format!("{}:{}", fn_name, line);
-
-                        // Admin / upgrade mechanism detection
-                        if is_upgrade_or_admin_fn(&fn_name) {
-                            report.upgrade_mechanisms.push(fn_name.clone());
-                            let has_auth = self.fn_has_auth(&f.block);
-                            if !has_auth {
-                                report.findings.push(UpgradeFinding {
-                                    category: UpgradeCategory::Governance,
-                                    function_name: Some(fn_name.clone()),
-                                    location: location.clone(),
-                                    message: format!(
-                                        "Upgrade/admin function '{}' modifies state without require_auth",
-                                        fn_name
-                                    ),
-                                    suggestion: "Add require_auth or require_auth_for_args before state mutations".to_string(),
-                                });
-                                report.suggestions.push(format!(
-                                    "Ensure '{}' requires admin authorization",
-                                    fn_name
-                                ));
-                            }
-                        }
-
-                        // Init pattern detection
-                        if is_init_fn(&fn_name) {
-                            report.init_functions.push(fn_name.clone());
-                            report.findings.push(UpgradeFinding {
-                                category: UpgradeCategory::InitPattern,
-                                function_name: Some(fn_name.clone()),
-                                location: location.clone(),
-                                message: format!("Initialization function '{}' detected", fn_name),
-                                suggestion: "Ensure init is only callable once; consider using a flag in storage".to_string(),
-                            });
-                        }
-
-                        // Timelock heuristics: look for delay/timelock in name or body
-                        if fn_name.to_lowercase().contains("upgrade")
-                            && self.fn_references_delay(&f.block)
-                        {
-                            report.findings.push(UpgradeFinding {
-                                category: UpgradeCategory::Timelock,
-                                function_name: Some(fn_name.clone()),
-                                location: location.clone(),
-                                message: format!(
-                                    "Upgrade function '{}' may use delay/timelock",
-                                    fn_name
-                                ),
-                                suggestion: "Verify timelock delay is enforced before upgrade".to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        // Storage layout suggestions
-        if report.storage_types.len() > 1 {
-            report.suggestions.push(format!(
-                "Track storage types [{}] across versions; avoid reordering or removing fields",
-                report.storage_types.join(", ")
-            ));
-        }
-
-        report
-    }
-
-    fn fn_has_auth(&self, block: &syn::Block) -> bool {
-        let mut has = false;
-        self.check_fn_body(block, &mut false, &mut has);
-        has
-    }
-
-    fn fn_references_delay(&self, block: &syn::Block) -> bool {
-        let s = quote::quote!(#block).to_string();
-        s.contains("delay") || s.contains("timelock") || s.contains("ledger_seq")
+        matches
     }
 
     // ── Size estimation helpers ───────────────────────────────────────────────
@@ -661,9 +608,21 @@ impl<'ast> Visit<'ast> for UnsafeVisitor {
     }
 }
 
-/// Trait for contracts that can validate their invariant at runtime.
+// ── SanctifiedGuard (runtime monitoring) ───────────────────────────────────────
+
+/// Error type for SanctifiedGuard runtime invariant violations.
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("invariant violation: {0}")]
+    InvariantViolation(String),
+}
+
+/// Trait for runtime monitoring. Implement this to enforce invariants
+/// on your contract state. The foundation for runtime monitoring.
 pub trait SanctifiedGuard {
-    fn check_invariant(&self, env: &Env) -> Result<(), String>;
+    /// Verifies that contract invariants hold in the current environment.
+    /// Returns `Ok(())` if all invariants hold, or `Err` with a violation message.
+    fn check_invariant(&self, env: &Env) -> Result<(), Error>;
 }
 
 // ── ArithVisitor ──────────────────────────────────────────────────────────────
@@ -839,8 +798,30 @@ mod tests {
                 }
             }
         "#;
-        // Should not panic during parsing
         let _ = analyzer.analyze_ledger_size(source);
+    }
+
+    #[test]
+    fn test_heavy_macro_usage_graceful() {
+        let analyzer = Analyzer::new(SanctifyConfig::default());
+        let source = r#"
+            use soroban_sdk::{contract, contractimpl, Env};
+
+            #[contract]
+            pub struct Token;
+
+            #[contractimpl]
+            impl Token {
+                pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+                    // Heavy macro expansion - analyzer must not panic
+                }
+            }
+        "#;
+        let _ = analyzer.scan_auth_gaps(source);
+        let _ = analyzer.scan_panics(source);
+        let _ = analyzer.analyze_unsafe_patterns(source);
+        let _ = analyzer.analyze_ledger_size(source);
+        let _ = analyzer.scan_arithmetic_overflow(source);
     }
 
     #[test]
@@ -1071,3 +1052,4 @@ mod tests {
         assert!(issues[0].location.starts_with("risky:"));
     }
 }
+pub mod gas_estimator;\npub mod gas_report;

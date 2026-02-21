@@ -1,9 +1,7 @@
 use clap::{Parser, Subcommand};
 use colored::*;
-use sanctifier_core::{
-    Analyzer, ArithmeticIssue, SanctifyConfig, SizeWarning, UnsafePattern, UpgradeReport,
-};
 use serde::Deserialize;
+use sanctifier_core::{Analyzer, ArithmeticIssue, CustomRuleMatch, SanctifyConfig, SizeWarning, UnsafePattern};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -41,25 +39,6 @@ enum Commands {
     Init,
 }
 
-#[derive(Deserialize, Default)]
-struct Config {
-    #[serde(default)]
-    rules: Vec<CustomRule>,
-}
-
-#[derive(Deserialize)]
-struct CustomRule {
-    name: Option<String>,
-    pattern: Option<String>,
-}
-
-#[derive(Clone, serde::Serialize)]
-struct CustomRuleMatch {
-    rule_name: String,
-    snippet: String,
-    line: usize,
-}
-
 fn main() {
     let cli = Cli::parse();
 
@@ -93,10 +72,10 @@ fn main() {
                 println!("{} Analyzing contract at {:?}...", "🔍".blue(), path);
             }
 
-            let mut config = SanctifyConfig::default();
+            let mut config = load_config(path);
             config.ledger_limit = *limit;
-            let analyzer = Analyzer::new(config);
-            let config = load_config(path);
+
+            let analyzer = Analyzer::new(config.clone());
 
             let mut all_size_warnings: Vec<SizeWarning> = Vec::new();
             let mut all_unsafe_patterns: Vec<UnsafePattern> = Vec::new();
@@ -111,13 +90,13 @@ fn main() {
                     path,
                     &analyzer,
                     &config.rules,
+                    &config,
                     &mut all_size_warnings,
                     &mut all_unsafe_patterns,
                     &mut all_auth_gaps,
                     &mut all_panic_issues,
                     &mut all_arithmetic_issues,
                     &mut all_custom_rule_matches,
-                    &mut upgrade_report,
                 );
             } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                 if let Ok(content) = fs::read_to_string(path) {
@@ -147,15 +126,11 @@ fn main() {
                         all_arithmetic_issues.push(a);
                     }
 
-                    let mut report = analyzer.analyze_upgrade_patterns(&content);
-                    for f in report.findings.iter_mut() {
-                        f.location = format!("{}: {}", path.display(), f.location);
+                    let custom_matches = analyzer.analyze_custom_rules(&content, &config.custom_rules);
+                    for mut m in custom_matches {
+                        m.snippet = format!("{}: {}", path.display(), m.snippet);
+                        all_custom_rule_matches.push(m);
                     }
-                    upgrade_report.findings.extend(report.findings);
-                    upgrade_report.upgrade_mechanisms.extend(report.upgrade_mechanisms);
-                    upgrade_report.init_functions.extend(report.init_functions);
-                    upgrade_report.storage_types.extend(report.storage_types);
-                    upgrade_report.suggestions.extend(report.suggestions);
                 }
             }
 
@@ -180,6 +155,9 @@ fn main() {
                     serde_json::to_string_pretty(&output).unwrap_or_else(|_| "{}".to_string())
                 );
             } else {
+                if !all_size_warnings.is_empty() {
+                    println!("\n{} Found Ledger Size Warnings!", "⚠️".yellow());
+                    for warning in &all_size_warnings {
                 if all_size_warnings.is_empty() {
                     println!("\nNo ledger size issues found.");
                 } else {
@@ -279,18 +257,16 @@ fn main() {
                     println!("\nNo upgrade pattern issues found.");
                 }
             }
-    },
-    Commands::Report { output } => {
-        println!("{} Generating report...", "📄".yellow());
-        if let Some(p) = output {
-            println!("Report saved to {:?}", p);
-        } else {
-            println!("Report printed to stdout.");
         }
-    },
-    Commands::Init => {
-        println!("Run sanctifier init in your project directory.");
-    },
+        Commands::Report { output } => {
+            println!("{} Generating report...", "📄".yellow());
+            if let Some(p) = output {
+                println!("Report saved to {:?}", p);
+            } else {
+                println!("Report printed to stdout.");
+            }
+        }
+        Commands::Init => {}
     }
 }
 
@@ -331,7 +307,7 @@ fn is_soroban_project(path: &Path) -> bool {
 fn analyze_directory(
     dir: &Path,
     analyzer: &Analyzer,
-    _rules: &[CustomRule],
+    config: &SanctifyConfig,
     all_size_warnings: &mut Vec<SizeWarning>,
     all_unsafe_patterns: &mut Vec<UnsafePattern>,
     all_auth_gaps: &mut Vec<String>,
@@ -343,18 +319,22 @@ fn analyze_directory(
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if path.is_dir() {
+                if config.ignore_paths.iter().any(|p| name.contains(p)) {
+                    continue;
+                }
                 analyze_directory(
                     &path,
                     analyzer,
-                    _rules,
+                    rules,
+                    config,
                     all_size_warnings,
                     all_unsafe_patterns,
                     all_auth_gaps,
                     all_panic_issues,
                     all_arithmetic_issues,
                     all_custom_rule_matches,
-                    upgrade_report,
                 );
             } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                 if let Ok(content) = fs::read_to_string(&path) {
@@ -388,26 +368,22 @@ fn analyze_directory(
                         all_arithmetic_issues.push(a);
                     }
 
-                    let mut report = analyzer.analyze_upgrade_patterns(&content);
-                    for f in report.findings.iter_mut() {
-                        f.location = format!("{}: {}", path.display(), f.location);
+                    let custom_matches = analyzer.analyze_custom_rules(&content, &config.custom_rules);
+                    for mut m in custom_matches {
+                        m.snippet = format!("{}: {}", path.display(), m.snippet);
+                        all_custom_rule_matches.push(m);
                     }
-                    upgrade_report.findings.extend(report.findings);
-                    upgrade_report.upgrade_mechanisms.extend(report.upgrade_mechanisms);
-                    upgrade_report.init_functions.extend(report.init_functions);
-                    upgrade_report.storage_types.extend(report.storage_types);
-                    upgrade_report.suggestions.extend(report.suggestions);
                 }
             }
         }
     }
 }
 
-fn load_config(path: &Path) -> Config {
+fn load_config(path: &Path) -> SanctifyConfig {
     find_config_path(path)
         .and_then(|p| fs::read_to_string(p).ok())
         .and_then(|content| toml::from_str(&content).ok())
-        .unwrap_or(Config { rules: vec![] })
+        .unwrap_or_default()
 }
 
 fn find_config_path(start_path: &Path) -> Option<PathBuf> {
