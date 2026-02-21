@@ -1,16 +1,10 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{parse_str, Fields, File, Item, Meta, Type};
+
 use soroban_sdk::Env;
-use syn::{parse_str, File, Item, Type, Fields, Meta, ExprMethodCall, Macro};
-use syn::visit::{self, Visit};
-use syn::spanned::Spanned;
-use serde::{Serialize, Deserialize};
-use serde::Serialize;
-use std::collections::HashSet;
-use thiserror::Error;
 
 // ── Existing types ────────────────────────────────────────────────────────────
 
@@ -42,6 +36,78 @@ pub struct UnsafePattern {
     pub pattern_type: PatternType,
     pub line: usize,
     pub snippet: String,
+}
+
+// ── Upgrade analysis types ────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub struct UpgradeFinding {
+    pub category: UpgradeCategory,
+    pub function_name: Option<String>,
+    pub location: String,
+    pub message: String,
+    pub suggestion: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum UpgradeCategory {
+    AdminControl,
+    Timelock,
+    InitPattern,
+    StorageLayout,
+    Governance,
+}
+
+/// Upgrade safety report.
+#[derive(Debug, Serialize, Clone)]
+pub struct UpgradeReport {
+    pub findings: Vec<UpgradeFinding>,
+    pub upgrade_mechanisms: Vec<String>,
+    pub init_functions: Vec<String>,
+    pub storage_types: Vec<String>,
+    pub suggestions: Vec<String>,
+}
+
+impl UpgradeReport {
+    pub fn empty() -> Self {
+        Self {
+            findings: vec![],
+            upgrade_mechanisms: vec![],
+            init_functions: vec![],
+            storage_types: vec![],
+            suggestions: vec![],
+        }
+    }
+}
+
+fn has_attr(attrs: &[syn::Attribute], name: &str) -> bool {
+    attrs.iter().any(|attr| {
+        if let Meta::Path(path) = &attr.meta {
+            path.is_ident(name) || path.segments.iter().any(|s| s.ident == name)
+        } else {
+            false
+        }
+    })
+}
+
+fn is_upgrade_or_admin_fn(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    matches!(
+        lower.as_str(),
+        "set_admin"
+            | "upgrade"
+            | "set_authorized"
+            | "deploy"
+            | "update_admin"
+            | "transfer_admin"
+            | "change_admin"
+    ) || (lower.contains("upgrade") && (lower.contains("contract") || lower.contains("wasm")))
+}
+
+fn is_init_fn(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower == "initialize" || lower == "init" || lower == "initialise"
 }
 
 // ── ArithmeticIssue (NEW) ─────────────────────────────────────────────────────
@@ -104,7 +170,7 @@ impl Analyzer {
 
         let mut gaps = Vec::new();
 
-        for item in file.items {
+        for item in &file.items {
             if let Item::Impl(i) = item {
                 for impl_item in &i.items {
                     if let syn::ImplItem::Fn(f) = impl_item {
@@ -120,7 +186,7 @@ impl Analyzer {
             }
         }
 
-        for item in file.items {
+        for item in &file.items {
             if let Item::Impl(i) = item {
                 for impl_item in &i.items {
                     if let syn::ImplItem::Fn(f) = impl_item {
@@ -400,6 +466,123 @@ impl Analyzer {
         visitor.issues
     }
 
+    // ── Upgrade pattern analysis ──────────────────────────────────────────────
+
+    /// Analyzes contracts for upgrade mechanisms, init patterns, storage layout
+    /// visibility, and governance (auth on privileged functions).
+    pub fn analyze_upgrade_patterns(&self, source: &str) -> UpgradeReport {
+        let file = match parse_str::<File>(source) {
+            Ok(f) => f,
+            Err(_) => return UpgradeReport::empty(),
+        };
+
+        let mut report = UpgradeReport {
+            findings: Vec::new(),
+            upgrade_mechanisms: Vec::new(),
+            init_functions: Vec::new(),
+            storage_types: Vec::new(),
+            suggestions: Vec::new(),
+        };
+
+        // Collect #[contracttype] storage types
+        for item in &file.items {
+            if let Item::Struct(s) = item {
+                if has_attr(&s.attrs, "contracttype") {
+                    report.storage_types.push(s.ident.to_string());
+                }
+            }
+            if let Item::Enum(e) = item {
+                if has_attr(&e.attrs, "contracttype") {
+                    report.storage_types.push(e.ident.to_string());
+                }
+            }
+        }
+
+        // Walk impl blocks for upgrade-related functions
+        for item in &file.items {
+            if let Item::Impl(impl_block) = item {
+                for impl_item in &impl_block.items {
+                    if let syn::ImplItem::Fn(f) = impl_item {
+                        let fn_name = f.sig.ident.to_string();
+                        let line = f.sig.ident.span().start().line;
+                        let location = format!("{}:{}", fn_name, line);
+
+                        // Admin / upgrade mechanism detection
+                        if is_upgrade_or_admin_fn(&fn_name) {
+                            report.upgrade_mechanisms.push(fn_name.clone());
+                            let has_auth = self.fn_has_auth(&f.block);
+                            if !has_auth {
+                                report.findings.push(UpgradeFinding {
+                                    category: UpgradeCategory::Governance,
+                                    function_name: Some(fn_name.clone()),
+                                    location: location.clone(),
+                                    message: format!(
+                                        "Upgrade/admin function '{}' modifies state without require_auth",
+                                        fn_name
+                                    ),
+                                    suggestion: "Add require_auth or require_auth_for_args before state mutations".to_string(),
+                                });
+                                report.suggestions.push(format!(
+                                    "Ensure '{}' requires admin authorization",
+                                    fn_name
+                                ));
+                            }
+                        }
+
+                        // Init pattern detection
+                        if is_init_fn(&fn_name) {
+                            report.init_functions.push(fn_name.clone());
+                            report.findings.push(UpgradeFinding {
+                                category: UpgradeCategory::InitPattern,
+                                function_name: Some(fn_name.clone()),
+                                location: location.clone(),
+                                message: format!("Initialization function '{}' detected", fn_name),
+                                suggestion: "Ensure init is only callable once; consider using a flag in storage".to_string(),
+                            });
+                        }
+
+                        // Timelock heuristics: look for delay/timelock in name or body
+                        if fn_name.to_lowercase().contains("upgrade")
+                            && self.fn_references_delay(&f.block)
+                        {
+                            report.findings.push(UpgradeFinding {
+                                category: UpgradeCategory::Timelock,
+                                function_name: Some(fn_name.clone()),
+                                location: location.clone(),
+                                message: format!(
+                                    "Upgrade function '{}' may use delay/timelock",
+                                    fn_name
+                                ),
+                                suggestion: "Verify timelock delay is enforced before upgrade".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Storage layout suggestions
+        if report.storage_types.len() > 1 {
+            report.suggestions.push(format!(
+                "Track storage types [{}] across versions; avoid reordering or removing fields",
+                report.storage_types.join(", ")
+            ));
+        }
+
+        report
+    }
+
+    fn fn_has_auth(&self, block: &syn::Block) -> bool {
+        let mut has = false;
+        self.check_fn_body(block, &mut false, &mut has);
+        has
+    }
+
+    fn fn_references_delay(&self, block: &syn::Block) -> bool {
+        let s = quote::quote!(#block).to_string();
+        s.contains("delay") || s.contains("timelock") || s.contains("ledger_seq")
+    }
+
     // ── Size estimation helpers ───────────────────────────────────────────────
 
     fn estimate_struct_size(&self, s: &syn::ItemStruct) -> usize {
@@ -478,47 +661,9 @@ impl<'ast> Visit<'ast> for UnsafeVisitor {
     }
 }
 
+/// Trait for contracts that can validate their invariant at runtime.
 pub trait SanctifiedGuard {
     fn check_invariant(&self, env: &Env) -> Result<(), String>;
-    fn visit_macro(&mut self, node: &'ast syn::Macro) {
-        if node.path.is_ident("panic") {
-            let line = node
-                .path
-                .get_ident()
-                .map(|i| i.span().start().line)
-                .unwrap_or(0);
-            self.patterns.push(UnsafePattern {
-                pattern_type: PatternType::Panic,
-                line,
-                snippet: "panic!()".to_string(),
-            });
-        }
-        visit::visit_macro(self, node);
-    }
-
-    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
-        let method = node.method.to_string();
-        match method.as_str() {
-            "unwrap" => {
-                let line = node.method.span().start().line;
-                self.patterns.push(UnsafePattern {
-                    pattern_type: PatternType::Unwrap,
-                    line,
-                    snippet: ".unwrap()".to_string(),
-                });
-            }
-            "expect" => {
-                let line = node.method.span().start().line;
-                self.patterns.push(UnsafePattern {
-                    pattern_type: PatternType::Expect,
-                    line,
-                    snippet: ".expect()".to_string(),
-                });
-            }
-            _ => {}
-        }
-        visit::visit_expr_method_call(self, node);
-    }
 }
 
 // ── ArithVisitor ──────────────────────────────────────────────────────────────
@@ -878,6 +1023,33 @@ mod tests {
         let issues = analyzer.scan_arithmetic_overflow(source);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].operation, "+");
+    }
+
+    #[test]
+    fn test_analyze_upgrade_patterns() {
+        let analyzer = Analyzer::new(SanctifyConfig::default());
+        let source = r#"
+            #[contracttype]
+            pub enum DataKey { Admin, Balance }
+
+            #[contractimpl]
+            impl Token {
+                pub fn initialize(env: Env, admin: Address) {
+                    env.storage().instance().set(&DataKey::Admin, &admin);
+                }
+                pub fn set_admin(env: Env, new_admin: Address) {
+                    env.storage().instance().set(&DataKey::Admin, &new_admin);
+                }
+            }
+        "#;
+        let report = analyzer.analyze_upgrade_patterns(source);
+        assert_eq!(report.init_functions, vec!["initialize"]);
+        assert_eq!(report.upgrade_mechanisms, vec!["set_admin"]);
+        assert!(report.storage_types.contains(&"DataKey".to_string()));
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| matches!(f.category, UpgradeCategory::Governance)));
     }
 
     #[test]

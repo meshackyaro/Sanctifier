@@ -1,6 +1,9 @@
 use clap::{Parser, Subcommand};
 use colored::*;
-use sanctifier_core::{Analyzer, ArithmeticIssue, SizeWarning, UnsafePattern};
+use sanctifier_core::{
+    Analyzer, ArithmeticIssue, SanctifyConfig, SizeWarning, UnsafePattern, UpgradeReport,
+};
+use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -38,9 +41,23 @@ enum Commands {
     Init,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct Config {
+    #[serde(default)]
     rules: Vec<CustomRule>,
+}
+
+#[derive(Deserialize)]
+struct CustomRule {
+    name: Option<String>,
+    pattern: Option<String>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct CustomRuleMatch {
+    rule_name: String,
+    snippet: String,
+    line: usize,
 }
 
 fn main() {
@@ -76,34 +93,32 @@ fn main() {
                 println!("{} Analyzing contract at {:?}...", "🔍".blue(), path);
             }
 
-            let mut analyzer = Analyzer::new(false);
-            analyzer.ledger_limit = *limit;
+            let mut config = SanctifyConfig::default();
+            config.ledger_limit = *limit;
+            let analyzer = Analyzer::new(config);
+            let config = load_config(path);
 
-            
-
-            
-            let mut all_size_warnings = Vec::new();
-            let mut all_auth_gaps = Vec::new();
-            let mut all_panic_issues = Vec::new();
-            let mut all_unsafe_patterns = Vec::new();
             let mut all_size_warnings: Vec<SizeWarning> = Vec::new();
             let mut all_unsafe_patterns: Vec<UnsafePattern> = Vec::new();
             let mut all_auth_gaps: Vec<String> = Vec::new();
-            let mut all_panic_issues = Vec::new();
+            let mut all_panic_issues: Vec<sanctifier_core::PanicIssue> = Vec::new();
             let mut all_arithmetic_issues: Vec<ArithmeticIssue> = Vec::new();
             let mut all_custom_rule_matches: Vec<CustomRuleMatch> = Vec::new();
+            let mut upgrade_report = UpgradeReport::empty();
 
             if path.is_dir() {
                 analyze_directory(
                     path,
                     &analyzer,
+                    &config.rules,
                     &mut all_size_warnings,
                     &mut all_unsafe_patterns,
                     &mut all_auth_gaps,
                     &mut all_panic_issues,
                     &mut all_arithmetic_issues,
+                    &mut all_custom_rule_matches,
+                    &mut upgrade_report,
                 );
-                analyze_directory(path, &analyzer, &config.rules, &mut all_size_warnings, &mut all_unsafe_patterns, &mut all_auth_gaps, &mut all_panic_issues, &mut all_arithmetic_issues, &mut all_custom_rule_matches);
             } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                 if let Ok(content) = fs::read_to_string(path) {
                     all_size_warnings.extend(analyzer.analyze_ledger_size(&content));
@@ -132,8 +147,15 @@ fn main() {
                         all_arithmetic_issues.push(a);
                     }
 
-                    let custom_matches = analyzer.analyze_custom_rules(&content, &config.rules);
-                    all_custom_rule_matches.extend(custom_matches);
+                    let mut report = analyzer.analyze_upgrade_patterns(&content);
+                    for f in report.findings.iter_mut() {
+                        f.location = format!("{}: {}", path.display(), f.location);
+                    }
+                    upgrade_report.findings.extend(report.findings);
+                    upgrade_report.upgrade_mechanisms.extend(report.upgrade_mechanisms);
+                    upgrade_report.init_functions.extend(report.init_functions);
+                    upgrade_report.storage_types.extend(report.storage_types);
+                    upgrade_report.suggestions.extend(report.suggestions);
                 }
             }
 
@@ -151,6 +173,7 @@ fn main() {
                     "panic_issues": all_panic_issues,
                     "arithmetic_issues": all_arithmetic_issues,
                     "custom_rule_matches": all_custom_rule_matches,
+                    "upgrade_report": upgrade_report,
                 });
                 println!(
                     "{}",
@@ -158,10 +181,9 @@ fn main() {
                 );
             } else {
                 if all_size_warnings.is_empty() {
-                    println!("No ledger size issues found.");
+                    println!("\nNo ledger size issues found.");
                 } else {
                     for warning in all_size_warnings {
-
                         println!(
                             "   {} Warning: Struct {} is approaching ledger entry size limit!",
                             "⚠️".yellow(),
@@ -173,8 +195,6 @@ fn main() {
                             warning.limit
                         );
                     }
-                } else {
-                    println!("\nNo ledger size issues found.");
                 }
 
                 if !all_auth_gaps.is_empty() {
@@ -233,24 +253,44 @@ fn main() {
                             m.line
                         );
                     }
+                }
+
+                if !upgrade_report.findings.is_empty()
+                    || !upgrade_report.upgrade_mechanisms.is_empty()
+                    || !upgrade_report.init_functions.is_empty()
+                {
+                    println!("\n{} Upgrade Pattern Analysis", "🔄".yellow());
+                    for f in &upgrade_report.findings {
+                        println!(
+                            "   {} [{}] {} ({})",
+                            "->".yellow(),
+                            format!("{:?}", f.category).to_lowercase(),
+                            f.message,
+                            f.location
+                        );
+                        println!("      {} {}", "💡".blue(), f.suggestion);
+                    }
+                    if !upgrade_report.suggestions.is_empty() {
+                        for s in &upgrade_report.suggestions {
+                            println!("   {} {}", "💡".blue(), s);
+                        }
+                    }
                 } else {
-                    println!("\nNo custom rule matches found.");
+                    println!("\nNo upgrade pattern issues found.");
                 }
             }
+    },
+    Commands::Report { output } => {
+        println!("{} Generating report...", "📄".yellow());
+        if let Some(p) = output {
+            println!("Report saved to {:?}", p);
+        } else {
+            println!("Report printed to stdout.");
         }
     },
-        Commands::Report { output } => {
-            println!("{} Generating report...", "📄".yellow());
-            if let Some(p) = output {
-                println!("Report saved to {:?}", p);
-            } else {
-                println!("Report printed to stdout.");
-            }
-        }
-        Commands::Init => {
-
-            }
-        }
+    Commands::Init => {
+        println!("Run sanctifier init in your project directory.");
+    },
     }
 }
 
@@ -291,13 +331,14 @@ fn is_soroban_project(path: &Path) -> bool {
 fn analyze_directory(
     dir: &Path,
     analyzer: &Analyzer,
-    rules: &[CustomRule],
+    _rules: &[CustomRule],
     all_size_warnings: &mut Vec<SizeWarning>,
     all_unsafe_patterns: &mut Vec<UnsafePattern>,
     all_auth_gaps: &mut Vec<String>,
     all_panic_issues: &mut Vec<sanctifier_core::PanicIssue>,
     all_arithmetic_issues: &mut Vec<ArithmeticIssue>,
     all_custom_rule_matches: &mut Vec<CustomRuleMatch>,
+    upgrade_report: &mut UpgradeReport,
 ) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -306,11 +347,14 @@ fn analyze_directory(
                 analyze_directory(
                     &path,
                     analyzer,
+                    _rules,
                     all_size_warnings,
                     all_unsafe_patterns,
                     all_auth_gaps,
                     all_panic_issues,
                     all_arithmetic_issues,
+                    all_custom_rule_matches,
+                    upgrade_report,
                 );
             } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                 if let Ok(content) = fs::read_to_string(&path) {
@@ -325,11 +369,6 @@ fn analyze_directory(
                         p.snippet = format!("{}: {}", path.display(), p.snippet);
                         all_unsafe_patterns.push(p);
                     }
-                analyze_directory(&path, analyzer, rules, all_size_warnings, all_unsafe_patterns, all_auth_gaps, all_panic_issues, all_arithmetic_issues, all_custom_rule_matches);
-            } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    let warnings = analyzer.analyze_ledger_size(&content);
-
 
                     let gaps = analyzer.scan_auth_gaps(&content);
                     for g in gaps {
@@ -349,8 +388,15 @@ fn analyze_directory(
                         all_arithmetic_issues.push(a);
                     }
 
-                    let custom_matches = analyzer.analyze_custom_rules(&content, rules);
-                    all_custom_rule_matches.extend(custom_matches);
+                    let mut report = analyzer.analyze_upgrade_patterns(&content);
+                    for f in report.findings.iter_mut() {
+                        f.location = format!("{}: {}", path.display(), f.location);
+                    }
+                    upgrade_report.findings.extend(report.findings);
+                    upgrade_report.upgrade_mechanisms.extend(report.upgrade_mechanisms);
+                    upgrade_report.init_functions.extend(report.init_functions);
+                    upgrade_report.storage_types.extend(report.storage_types);
+                    upgrade_report.suggestions.extend(report.suggestions);
                 }
             }
         }
