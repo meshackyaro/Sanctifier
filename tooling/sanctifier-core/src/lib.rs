@@ -5,6 +5,7 @@ use std::panic::{self, AssertUnwindSafe};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{parse_str, Fields, File, Item, Meta, Type};
+
 use soroban_sdk::Env;
 use thiserror::Error;
 
@@ -38,6 +39,78 @@ pub struct UnsafePattern {
     pub pattern_type: PatternType,
     pub line: usize,
     pub snippet: String,
+}
+
+// ── Upgrade analysis types ────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub struct UpgradeFinding {
+    pub category: UpgradeCategory,
+    pub function_name: Option<String>,
+    pub location: String,
+    pub message: String,
+    pub suggestion: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum UpgradeCategory {
+    AdminControl,
+    Timelock,
+    InitPattern,
+    StorageLayout,
+    Governance,
+}
+
+/// Upgrade safety report.
+#[derive(Debug, Serialize, Clone)]
+pub struct UpgradeReport {
+    pub findings: Vec<UpgradeFinding>,
+    pub upgrade_mechanisms: Vec<String>,
+    pub init_functions: Vec<String>,
+    pub storage_types: Vec<String>,
+    pub suggestions: Vec<String>,
+}
+
+impl UpgradeReport {
+    pub fn empty() -> Self {
+        Self {
+            findings: vec![],
+            upgrade_mechanisms: vec![],
+            init_functions: vec![],
+            storage_types: vec![],
+            suggestions: vec![],
+        }
+    }
+}
+
+fn has_attr(attrs: &[syn::Attribute], name: &str) -> bool {
+    attrs.iter().any(|attr| {
+        if let Meta::Path(path) = &attr.meta {
+            path.is_ident(name) || path.segments.iter().any(|s| s.ident == name)
+        } else {
+            false
+        }
+    })
+}
+
+fn is_upgrade_or_admin_fn(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    matches!(
+        lower.as_str(),
+        "set_admin"
+            | "upgrade"
+            | "set_authorized"
+            | "deploy"
+            | "update_admin"
+            | "transfer_admin"
+            | "change_admin"
+    ) || (lower.contains("upgrade") && (lower.contains("contract") || lower.contains("wasm")))
+}
+
+fn is_init_fn(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower == "initialize" || lower == "init" || lower == "initialise"
 }
 
 // ── ArithmeticIssue (NEW) ─────────────────────────────────────────────────────
@@ -931,6 +1004,33 @@ mod tests {
         let issues = analyzer.scan_arithmetic_overflow(source);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].operation, "+");
+    }
+
+    #[test]
+    fn test_analyze_upgrade_patterns() {
+        let analyzer = Analyzer::new(SanctifyConfig::default());
+        let source = r#"
+            #[contracttype]
+            pub enum DataKey { Admin, Balance }
+
+            #[contractimpl]
+            impl Token {
+                pub fn initialize(env: Env, admin: Address) {
+                    env.storage().instance().set(&DataKey::Admin, &admin);
+                }
+                pub fn set_admin(env: Env, new_admin: Address) {
+                    env.storage().instance().set(&DataKey::Admin, &new_admin);
+                }
+            }
+        "#;
+        let report = analyzer.analyze_upgrade_patterns(source);
+        assert_eq!(report.init_functions, vec!["initialize"]);
+        assert_eq!(report.upgrade_mechanisms, vec!["set_admin"]);
+        assert!(report.storage_types.contains(&"DataKey".to_string()));
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| matches!(f.category, UpgradeCategory::Governance)));
     }
 
     #[test]

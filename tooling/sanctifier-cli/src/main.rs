@@ -83,6 +83,7 @@ fn main() {
             let mut all_panic_issues: Vec<sanctifier_core::PanicIssue> = Vec::new();
             let mut all_arithmetic_issues: Vec<ArithmeticIssue> = Vec::new();
             let mut all_custom_rule_matches: Vec<CustomRuleMatch> = Vec::new();
+            let mut upgrade_report = UpgradeReport::empty();
 
             if path.is_dir() {
                 analyze_directory(
@@ -147,6 +148,7 @@ fn main() {
                     "panic_issues": all_panic_issues,
                     "arithmetic_issues": all_arithmetic_issues,
                     "custom_rule_matches": all_custom_rule_matches,
+                    "upgrade_report": upgrade_report,
                 });
                 println!(
                     "{}",
@@ -229,8 +231,30 @@ fn main() {
                             m.line
                         );
                     }
+                }
+
+                if !upgrade_report.findings.is_empty()
+                    || !upgrade_report.upgrade_mechanisms.is_empty()
+                    || !upgrade_report.init_functions.is_empty()
+                {
+                    println!("\n{} Upgrade Pattern Analysis", "🔄".yellow());
+                    for f in &upgrade_report.findings {
+                        println!(
+                            "   {} [{}] {} ({})",
+                            "->".yellow(),
+                            format!("{:?}", f.category).to_lowercase(),
+                            f.message,
+                            f.location
+                        );
+                        println!("      {} {}", "💡".blue(), f.suggestion);
+                    }
+                    if !upgrade_report.suggestions.is_empty() {
+                        for s in &upgrade_report.suggestions {
+                            println!("   {} {}", "💡".blue(), s);
+                        }
+                    }
                 } else {
-                    println!("\nNo custom rule matches found.");
+                    println!("\nNo upgrade pattern issues found.");
                 }
             }
         }
@@ -290,6 +314,7 @@ fn analyze_directory(
     all_panic_issues: &mut Vec<sanctifier_core::PanicIssue>,
     all_arithmetic_issues: &mut Vec<ArithmeticIssue>,
     all_custom_rule_matches: &mut Vec<CustomRuleMatch>,
+    upgrade_report: &mut UpgradeReport,
 ) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
