@@ -5,16 +5,7 @@ use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{parse_str, Fields, File, Item, Meta, Type};
 use soroban_sdk::Env;
-
-/// Runs analysis logic inside a panic guard. Returns empty/default on panic,
-/// e.g. when complex macros (contractimpl, etc.) cause AST parsing to fail.
-fn with_panic_guard<T, F>(f: F) -> T
-where
-    F: FnOnce() -> T + panic::UnwindSafe,
-    T: Default,
-{
-    panic::catch_unwind(AssertUnwindSafe(f)).unwrap_or_default()
-}
+use thiserror::Error;
 
 // ── Existing types ────────────────────────────────────────────────────────────
 
@@ -111,6 +102,7 @@ impl Analyzer {
         };
 
         let mut gaps = Vec::new();
+
         for item in &file.items {
             if let Item::Impl(i) = item {
                 for impl_item in &i.items {
@@ -484,9 +476,21 @@ impl<'ast> Visit<'ast> for UnsafeVisitor {
     }
 }
 
-/// Trait for runtime invariant checking. Implement to enforce contract invariants.
+// ── SanctifiedGuard (runtime monitoring) ───────────────────────────────────────
+
+/// Error type for SanctifiedGuard runtime invariant violations.
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("invariant violation: {0}")]
+    InvariantViolation(String),
+}
+
+/// Trait for runtime monitoring. Implement this to enforce invariants
+/// on your contract state. The foundation for runtime monitoring.
 pub trait SanctifiedGuard {
-    fn check_invariant(&self, env: &Env) -> Result<(), String>;
+    /// Verifies that contract invariants hold in the current environment.
+    /// Returns `Ok(())` if all invariants hold, or `Err` with a violation message.
+    fn check_invariant(&self, env: &Env) -> Result<(), Error>;
 }
 
 // ── ArithVisitor ──────────────────────────────────────────────────────────────
@@ -889,3 +893,4 @@ mod tests {
         assert!(issues[0].location.starts_with("risky:"));
     }
 }
+pub mod gas_estimator;\npub mod gas_report;
