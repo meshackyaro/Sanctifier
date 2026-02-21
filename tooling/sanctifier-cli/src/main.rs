@@ -1,8 +1,9 @@
 use clap::{Parser, Subcommand};
 use colored::*;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::fs;
-use sanctifier_core::{Analyzer, ArithmeticIssue, SizeWarning, UnsafePattern, PatternType, SanctifyConfig};
+
 
 #[derive(Parser)]
 #[command(name = "sanctifier")]
@@ -38,6 +39,11 @@ enum Commands {
     Init,
 }
 
+#[derive(Deserialize)]
+struct Config {
+    rules: Vec<CustomRule>,
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -59,19 +65,7 @@ fn main() {
                 println!("{} Analyzing contract at {:?}...", "🔍".blue(), path);
             }
             
-            let mut config = if Path::new(".sanctify.toml").exists() {
-                let content = fs::read_to_string(".sanctify.toml").unwrap_or_default();
-                toml::from_str(&content).unwrap_or_else(|_| SanctifyConfig::default())
-            } else {
-                SanctifyConfig::default()
-            };
-            
-            // CLI arguments override config file
-            if *limit != 64000 {
-                config.ledger_limit = *limit;
-            }
 
-            let analyzer = Analyzer::new(config);
             
             let mut all_size_warnings = Vec::new();
             let mut all_auth_gaps = Vec::new();
@@ -82,10 +76,10 @@ fn main() {
             let mut all_auth_gaps: Vec<String> = Vec::new();
             let mut all_panic_issues = Vec::new();
             let mut all_arithmetic_issues: Vec<ArithmeticIssue> = Vec::new();
+            let mut all_custom_rule_matches: Vec<CustomRuleMatch> = Vec::new();
 
             if path.is_dir() {
-                analyze_directory(path, &analyzer, &mut all_size_warnings, &mut all_auth_gaps, &mut all_panic_issues, &mut all_unsafe_patterns);
-                analyze_directory(path, &analyzer, &mut all_size_warnings, &mut all_unsafe_patterns, &mut all_auth_gaps, &mut all_panic_issues, &mut all_arithmetic_issues);
+                analyze_directory(path, &analyzer, &config.rules, &mut all_size_warnings, &mut all_unsafe_patterns, &mut all_auth_gaps, &mut all_panic_issues, &mut all_arithmetic_issues, &mut all_custom_rule_matches);
             } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                 if let Ok(content) = fs::read_to_string(path) {
                     all_size_warnings.extend(analyzer.analyze_ledger_size(&content));
@@ -113,6 +107,9 @@ fn main() {
                         a.location = format!("{}: {}", path.display(), a.location);
                         all_arithmetic_issues.push(a);
                     }
+
+                    let custom_matches = analyzer.analyze_custom_rules(&content, &config.rules);
+                    all_custom_rule_matches.extend(custom_matches);
                 }
             }
 
@@ -129,25 +126,24 @@ fn main() {
                     "auth_gaps": all_auth_gaps,
                     "panic_issues": all_panic_issues,
                     "arithmetic_issues": all_arithmetic_issues,
+                    "custom_rule_matches": all_custom_rule_matches,
                 });
                 println!("{}", serde_json::to_string_pretty(&output).unwrap_or_else(|_| "{}".to_string()));
             } else {
-            if format == "text" {
-                if all_size_warnings.is_empty() {
-                    println!("No ledger size issues found.");
-                } else {
-                    for warning in &all_size_warnings {
+
                         println!(
-                            "{} Warning: Struct {} is approaching ledger entry size limit!",
+                            "   {} Warning: Struct {} is approaching ledger entry size limit!",
                             "⚠️".yellow(),
                             warning.struct_name.bold()
                         );
                         println!(
-                            "   Estimated size: {} bytes (Limit: {} bytes)",
+                            "      Estimated size: {} bytes (Limit: {} bytes)",
                             warning.estimated_size.to_string().red(),
                             warning.limit
                         );
                     }
+                } else {
+                    println!("\nNo ledger size issues found.");
                 }
 
                 if !all_auth_gaps.is_empty() {
@@ -190,6 +186,21 @@ fn main() {
                 } else {
                     println!("\nNo arithmetic overflow risks found.");
                 }
+
+                if !all_custom_rule_matches.is_empty() {
+                    println!("\n{} Found Custom Rule Matches!", "📜".yellow());
+                    for m in all_custom_rule_matches {
+                        println!(
+                            "   {} Rule {}: `{}` (Line: {})",
+                            "->".yellow(),
+                            m.rule_name.bold(),
+                            m.snippet.trim().italic(),
+                            m.line
+                        );
+                    }
+                } else {
+                    println!("\nNo custom rule matches found.");
+                }
             }
         }
     },
@@ -202,17 +213,7 @@ fn main() {
             }
         },
         Commands::Init => {
-            println!("{} Initializing Sanctifier configuration...", "⚙️".cyan());
-            let config = SanctifyConfig::default();
-            let toml = toml::to_string_pretty(&config).unwrap_or_default();
-            
-            if Path::new(".sanctify.toml").exists() {
-                println!("{} .sanctify.toml already exists, skipping.", "⚠️".yellow());
-            } else {
-                match fs::write(".sanctify.toml", toml) {
-                    Ok(_) => println!("{} Created .sanctify.toml", "✅".green()),
-                    Err(e) => eprintln!("{} Failed to create .sanctify.toml: {}", "❌".red(), e),
-                }
+
             }
         }
     }
@@ -255,24 +256,23 @@ fn is_soroban_project(path: &Path) -> bool {
 fn analyze_directory(
     dir: &Path,
     analyzer: &Analyzer,
+    rules: &[CustomRule],
     all_size_warnings: &mut Vec<SizeWarning>,
     all_unsafe_patterns: &mut Vec<UnsafePattern>,
     all_auth_gaps: &mut Vec<String>,
     all_panic_issues: &mut Vec<sanctifier_core::PanicIssue>,
     all_arithmetic_issues: &mut Vec<ArithmeticIssue>,
+    all_custom_rule_matches: &mut Vec<CustomRuleMatch>,
 ) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                analyze_directory(&path, analyzer, all_size_warnings, all_unsafe_patterns, all_auth_gaps, all_panic_issues, all_arithmetic_issues);
+                analyze_directory(&path, analyzer, rules, all_size_warnings, all_unsafe_patterns, all_auth_gaps, all_panic_issues, all_arithmetic_issues, all_custom_rule_matches);
             } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                 if let Ok(content) = fs::read_to_string(&path) {
                     let warnings = analyzer.analyze_ledger_size(&content);
-                    for mut w in warnings {
-                        w.struct_name = format!("{}: {}", path.display(), w.struct_name);
-                        all_size_warnings.push(w);
-                    }
+
 
                     let gaps = analyzer.scan_auth_gaps(&content);
                     for g in gaps {
@@ -291,8 +291,39 @@ fn analyze_directory(
                         a.location = format!("{}: {}", path.display(), a.location);
                         all_arithmetic_issues.push(a);
                     }
+
+                    let custom_matches = analyzer.analyze_custom_rules(&content, rules);
+                    all_custom_rule_matches.extend(custom_matches);
                 }
             }
         }
     }
+}
+
+fn load_config(path: &Path) -> Config {
+    find_config_path(path)
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|content| toml::from_str(&content).ok())
+        .unwrap_or(Config { rules: vec![] })
+}
+
+fn find_config_path(start_path: &Path) -> Option<PathBuf> {
+    let mut current = if start_path.is_dir() {
+        Some(start_path.to_path_buf())
+    } else {
+        start_path.parent().map(|p| p.to_path_buf())
+    };
+
+    while let Some(path) = current {
+        let config_path = path.join(".sanctify.toml");
+        if config_path.exists() {
+            return Some(config_path);
+        }
+        current = if path.parent().is_some() {
+            path.parent().map(|p| p.to_path_buf())
+        } else {
+            None
+        }
+    }
+    None
 }
