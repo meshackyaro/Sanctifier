@@ -18,8 +18,4 @@ serde = { version = "1.0", features = ["derive"] }
 
 [[bin]]
 name = "sanctifier"
-path = "src/main.rs"
 
-[dev-dependencies]
-assert_cmd = "2.1.2"
-predicates = "3.1.4"
