@@ -1375,22 +1375,4 @@ mod tests {
         assert!(issues.iter().any(|i| i.issue_type == EventIssueType::OptimizableTopic && i.message.contains("\"event1\"")));
     }
 }
-pub mod gas_estimator;
-pub mod gas_report;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn with_panic_guard<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R + std::panic::AssertUnwindSafe,
-    R: Default,
-{
-    match std::panic::catch_unwind(f) {
-        Ok(res) => res,
-        Err(_) => R::default(),
-    }
-}
-
-const DEFAULT_APPROACHING_THRESHOLD: f64 = 0.8;
-pub mod gas_estimator;
-pub mod gas_report;
