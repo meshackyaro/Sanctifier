@@ -1,0 +1,18 @@
+[package]
+name = "kani-poc-contract"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+soroban-sdk = "20.0.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
