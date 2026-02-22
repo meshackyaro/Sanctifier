@@ -7,6 +7,9 @@ use sanctifier_core::{
 };
 use std::fs;
 use std::path::{Path, PathBuf};
+mod commands;
+
+use commands::analyze::AnalyzeArgs;
 
 #[derive(Parser)]
 #[command(name = "sanctifier")]
@@ -19,30 +22,10 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Analyze a Soroban contract for vulnerabilities
-    Analyze {
-        /// Path to the contract directory or Cargo.toml
-        #[arg(default_value = ".")]
-        path: PathBuf,
-
-        /// Output format (text, json)
-        #[arg(short, long, default_value = "text")]
-        format: String,
-
-        /// Limit for ledger entry size in bytes
-        #[arg(short, long, default_value = "64000")]
-        limit: usize,
-    },
-    /// Generate a security report
-    Report {
-        /// Output file path
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-    },
-    /// Initialize Sanctifier in a new project
-    Init,
+    Analyze(AnalyzeArgs),
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
@@ -318,21 +301,10 @@ fn is_soroban_project(path: &Path) -> bool {
                 break;
             }
             current = p.parent();
+    match cli.command {
+        Commands::Analyze(args) => {
+            commands::analyze::exec(args)?;
         }
-        match found {
-            Some(f) => f,
-            None => return false,
-        }
-    };
-
-    if !cargo_toml_path.exists() {
-        return false;
-    }
-
-    if let Ok(content) = fs::read_to_string(cargo_toml_path) {
-        content.contains("soroban-sdk")
-    } else {
-        false
     }
 }
 
@@ -445,4 +417,6 @@ fn find_config_path(start_path: &Path) -> Option<PathBuf> {
         }
     }
     None
+
+    Ok(())
 }
