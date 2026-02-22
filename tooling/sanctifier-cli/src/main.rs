@@ -3,6 +3,7 @@ use colored::*;
 use std::path::{Path, PathBuf};
 use std::fs;
 use sanctifier_core::{Analyzer, ArithmeticIssue, SizeWarning, UnsafePattern, PatternType};
+use syn;
 
 #[derive(Parser)]
 #[command(name = "sanctifier")]
@@ -34,9 +35,22 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Initialize Sanctifier in a new project
+  /// Initialize Sanctifier in a new project
     Init,
+    /// Analyze contract complexity metrics
+    Complexity {
+        /// Path to contract directory or .rs file
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Output format (text, json, html)
+        #[arg(short, long, default_value = "text")]
+        format: String,
+        /// Write report to file
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
+
 
 fn main() {
     let cli = Cli::parse();
@@ -186,6 +200,48 @@ fn main() {
         Commands::Init => {
             println!("{} Initializing Sanctifier configuration...", "⚙️".cyan());
             println!("Created .sanctify.toml");
+        },
+        Commands::Complexity { path, format, output } => {
+            use sanctifier_core::complexity;
+            use std::fs;
+
+            println!("{} Analyzing complexity at {:?}...", "📊".blue(), path);
+
+            let mut all_functions = Vec::new();
+            let mut total_deps = 0;
+
+            let rs_files = collect_rs_files(path);
+            for file_path in &rs_files {
+                if let Ok(source) = fs::read_to_string(file_path) {
+                    if let Ok(ast) = syn::parse_file(&source) {
+                        let m = complexity::analyze_complexity(&ast, &file_path.display().to_string());
+                        total_deps += m.dependency_count;
+                        all_functions.extend(m.functions);
+                    }
+                }
+            }
+
+            let combined = complexity::ContractMetrics {
+                contract_path: path.display().to_string(),
+                dependency_count: total_deps,
+                functions: all_functions,
+            };
+
+            let report = match format.as_str() {
+                "json" => complexity::render_json_report(&combined),
+                "html" => complexity::render_html_report(&combined),
+                _      => complexity::render_text_report(&combined),
+            };
+
+            if let Some(out_path) = output {
+                fs::write(out_path, &report).expect("Failed to write report");
+                println!("{} Report written to {:?}", "✅".green(), out_path);
+            } else {
+                println!("{}", report);
+            }
+
+            let has_warnings = combined.functions.iter().any(|f| !f.warnings.is_empty());
+            if has_warnings { std::process::exit(1); }
         }
     }
 }
@@ -266,5 +322,25 @@ fn analyze_directory(
                 }
             }
         }
+        fn collect_rs_files(path: &PathBuf) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if path.is_file() && path.extension().map_or(false, |e| e == "rs") {
+        files.push(path.clone());
+    } else if path.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if p.is_dir() && name != "target" && name != ".git" {
+                    files.extend(collect_rs_files(&p));
+                } else if p.extension().map_or(false, |e| e == "rs") {
+                    files.push(p);
+                }
+            }
+        }
     }
+    files
+}
+    }
+    
 }
