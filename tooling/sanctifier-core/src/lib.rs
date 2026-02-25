@@ -20,7 +20,6 @@ where
     catch_unwind(f).unwrap_or_default()
 }
 
-
 // ── Existing types ────────────────────────────────────────────────────────────
 
 /// Severity of a ledger size warning.
