@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 pub mod gas_estimator;
 mod storage_collision;
 use std::collections::HashSet;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::catch_unwind;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{parse_str, Fields, File, Item, Meta, Type};
@@ -163,14 +163,21 @@ pub struct StorageCollisionIssue {
     pub message: String,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub enum EventIssueType {
+    /// Topics count varies for the same event name.
+    InconsistentSchema,
+    /// Topic could be optimized with symbol_short!.
+    OptimizableTopic,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct EventIssue {
+    pub function_name: String,
     pub event_name: String,
-    pub topic_count: usize,
-    pub location: String,
-    pub issue_type: String,
+    pub issue_type: EventIssueType,
     pub message: String,
-    pub suggestion: String,
+    pub location: String,
 }
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -544,9 +551,9 @@ impl Analyzer {
 
     fn analyze_ledger_size_impl(&self, source: &str) -> Vec<SizeWarning> {
         let limit = self.config.ledger_limit;
-        let approaching = (limit as f64 * DEFAULT_APPROACHING_THRESHOLD) as usize;
-        let strict = self.config.strict_mode;
-        let strict_threshold = limit / 2;
+        let _approaching = (limit as f64 * DEFAULT_APPROACHING_THRESHOLD) as usize;
+        let _strict = self.config.strict_mode;
+        let _strict_threshold = limit / 2;
 
         let file = match parse_str::<File>(source) {
             Ok(f) => f,
@@ -717,7 +724,7 @@ impl Analyzer {
                     .unwrap_or_else(|| format!("unknown_{}", line_num));
 
                 let location = format!("line {}", line_num + 1);
-                let location_key = format!("{}:{}", event_name, topic_count);
+                let _location_key = format!("{}:{}", event_name, topic_count);
 
                 if let Some(previous_counts) = event_schemas.get(&event_name) {
                     for &prev_count in previous_counts {
@@ -726,15 +733,14 @@ impl Analyzer {
                             if !issue_locations.contains(&issue_key) {
                                 issue_locations.insert(issue_key);
                                 issues.push(EventIssue {
+                                    function_name: "unknown".to_string(), // scan_events_impl is regex-based, function context is limited
                                     event_name: event_name.clone(),
-                                    topic_count,
-                                    location: location.clone(),
-                                    issue_type: "inconsistent_topics".to_string(),
+                                    issue_type: EventIssueType::InconsistentSchema,
                                     message: format!(
                                         "Event '{}' has inconsistent topic count. Previous: {}, Current: {}",
                                         event_name, prev_count, topic_count
                                     ),
-                                    suggestion: "Ensure the same event always uses the same number of topics.".to_string(),
+                                    location: location.clone(),
                                 });
                             }
                         }
@@ -753,12 +759,11 @@ impl Analyzer {
                         if !issue_locations.contains(&issue_key) {
                             issue_locations.insert(issue_key);
                             issues.push(EventIssue {
+                                function_name: "unknown".to_string(),
                                 event_name,
-                                topic_count,
-                                location: format!("line {}", line_num + 1),
-                                issue_type: "gas_optimization".to_string(),
+                                issue_type: EventIssueType::OptimizableTopic,
                                 message: "Consider using symbol_short! for short topic names to save gas.".to_string(),
-                                suggestion: "Replace string literals with symbol_short!(\"...\") for topics that are short (up to 9 characters).".to_string(),
+                                location: format!("line {}", line_num + 1),
                             });
                         }
                     }
@@ -768,7 +773,6 @@ impl Analyzer {
 
         issues
     }
-
 
     // ── Unsafe-pattern visitor ────────────────────────────────────────────────
 
@@ -1653,7 +1657,9 @@ mod tests {
         "#;
         let issues = analyzer.scan_events(source);
         assert!(!issues.is_empty());
-        assert!(issues.iter().any(|i| i.issue_type == "inconsistent_topics"));
+        assert!(issues
+            .iter()
+            .any(|i| i.issue_type == EventIssueType::InconsistentSchema));
     }
 
     #[test]
@@ -1668,6 +1674,8 @@ mod tests {
             }
         "#;
         let issues = analyzer.scan_events(source);
-        assert!(issues.iter().any(|i| i.issue_type == "gas_optimization"));
+        assert!(issues
+            .iter()
+            .any(|i| i.issue_type == EventIssueType::OptimizableTopic));
     }
 }
