@@ -1,9 +1,9 @@
 use clap::{Parser, Subcommand};
 use colored::*;
-use serde::Deserialize;
+
 use sanctifier_core::{
     Analyzer, ArithmeticIssue, CustomRuleMatch, EventIssue, EventIssueType, SanctifyConfig,
-    SizeWarning, UnsafePattern, UpgradeCategory, UpgradeReport,
+    SizeWarning, UnsafePattern, UpgradeReport,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -167,13 +167,19 @@ fn main() {
                     serde_json::to_string_pretty(&output).unwrap_or_else(|_| "{}".to_string())
                 );
             } else {
-                if !all_size_warnings.is_empty() {
-                    println!("\n{} Found Ledger Size Warnings!", "⚠️".yellow());
-                    for warning in &all_size_warnings {
                 if all_size_warnings.is_empty() {
                     println!("\nNo ledger size issues found.");
                 } else {
-                    for warning in all_size_warnings {
+                    println!("\n{} Found Ledger Size Warnings!", "⚠️".yellow());
+                    for warning in &all_size_warnings {
+                        let icon = match warning.level {
+                            sanctifier_core::SizeWarningLevel::ExceedsLimit => "🛑".red(),
+                            sanctifier_core::SizeWarningLevel::ApproachingLimit => "⚠️".yellow(),
+                        };
+                        let msg = match warning.level {
+                            sanctifier_core::SizeWarningLevel::ExceedsLimit => "EXCEEDS".red().bold(),
+                            sanctifier_core::SizeWarningLevel::ApproachingLimit => "is approaching".yellow(),
+                        };
                         println!(
                             "   {} {} {} the ledger entry size limit!",
                             icon,

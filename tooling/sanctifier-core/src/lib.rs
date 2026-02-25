@@ -1,7 +1,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::panic::{self, AssertUnwindSafe};
+use std::panic;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{parse_str, Fields, File, Item, Meta, Type};
@@ -73,7 +73,7 @@ pub enum UpgradeCategory {
 }
 
 /// Upgrade safety report.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, Default)]
 pub struct UpgradeReport {
     pub findings: Vec<UpgradeFinding>,
     pub upgrade_mechanisms: Vec<String>,
@@ -604,6 +604,7 @@ impl Analyzer {
         visitor.issues
     }
 
+
     // ── Unsafe-pattern visitor ────────────────────────────────────────────────
 
     /// Visitor-based scan for `panic!`, `.unwrap()`, `.expect()` with line
@@ -783,6 +784,137 @@ impl Analyzer {
     }
 }
 
+// ── EventVisitor ──────────────────────────────────────────────────────────────
+
+struct EventVisitor {
+    issues: Vec<EventIssue>,
+    current_fn: Option<String>,
+    /// Maps event name -> number of topics found.
+    event_schemas: std::collections::HashMap<String, usize>,
+}
+
+impl<'ast> Visit<'ast> for EventVisitor {
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        let prev = self.current_fn.take();
+        self.current_fn = Some(node.sig.ident.to_string());
+        visit::visit_impl_item_fn(self, node);
+        self.current_fn = prev;
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        let prev = self.current_fn.take();
+        self.current_fn = Some(node.sig.ident.to_string());
+        visit::visit_item_fn(self, node);
+        self.current_fn = prev;
+    }
+
+    fn visit_expr_method_call(&mut self, i: &'ast syn::ExprMethodCall) {
+        let method_name = i.method.to_string();
+        if method_name == "publish" {
+            // Heuristic check for env.events().publish(topics, data)
+            if let syn::Expr::MethodCall(inner_m) = &*i.receiver {
+                if inner_m.method == "events" {
+                    if let Some(fn_name) = self.current_fn.as_ref().cloned() {
+                        self.analyze_publish_call(i, &fn_name);
+                    }
+                }
+            }
+        }
+        visit::visit_expr_method_call(self, i);
+    }
+}
+
+impl EventVisitor {
+    fn analyze_publish_call(&mut self, i: &syn::ExprMethodCall, fn_name: &str) {
+        if i.args.len() < 2 {
+            return;
+        }
+        let topics_arg = &i.args[0];
+
+        // 1. Extract event name and topic count
+        let (event_name, topic_count) = match self.extract_event_info(topics_arg) {
+            Some(info) => info,
+            None => return,
+        };
+
+        // 2. Check for schema consistency
+        if let Some(&prev_count) = self.event_schemas.get(&event_name) {
+            if prev_count != topic_count {
+                self.issues.push(EventIssue {
+                    function_name: fn_name.to_string(),
+                    event_name: event_name.clone(),
+                    issue_type: EventIssueType::InconsistentSchema,
+                    message: format!(
+                        "Inconsistent topic count for event '{}': expected {}, found {}",
+                        event_name, prev_count, topic_count
+                    ),
+                    location: format!("{}:{}", fn_name, topics_arg.span().start().line),
+                });
+            }
+        } else {
+            self.event_schemas.insert(event_name.clone(), topic_count);
+        }
+
+        // 3. Check for optimizable topics (bare string literals)
+        self.check_optimizable_topics(topics_arg, fn_name, &event_name);
+    }
+
+    fn extract_event_info(&self, topics: &syn::Expr) -> Option<(String, usize)> {
+        match topics {
+            syn::Expr::Tuple(t) => {
+                if let Some(syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(s),
+                    ..
+                })) = t.elems.first()
+                {
+                    return Some((s.value(), t.elems.len()));
+                }
+            }
+            syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) => {
+                return Some((s.value(), 1));
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn check_optimizable_topics(&mut self, topics: &syn::Expr, fn_name: &str, event_name: &str) {
+        let check_lit = |expr: &syn::Expr, issues: &mut Vec<EventIssue>| {
+            if let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = expr
+            {
+                let val = s.value();
+                if val.len() <= 10 {
+                    issues.push(EventIssue {
+                        function_name: fn_name.to_string(),
+                        event_name: event_name.to_string(),
+                        issue_type: EventIssueType::OptimizableTopic,
+                        message: format!(
+                            "Topic \"{}\" can be optimized using `symbol_short!(\"{}\")`",
+                            val, val
+                        ),
+                        location: format!("{}:{}", fn_name, expr.span().start().line),
+                    });
+                }
+            }
+        };
+
+        match topics {
+            syn::Expr::Tuple(t) => {
+                for elem in &t.elems {
+                    check_lit(elem, &mut self.issues);
+                }
+            }
+            _ => check_lit(topics, &mut self.issues),
+        }
+    }
+}
+
 // ── UnsafeVisitor ─────────────────────────────────────────────────────────────
 
 struct UnsafeVisitor {
@@ -807,15 +939,15 @@ impl<'ast> Visit<'ast> for UnsafeVisitor {
         visit::visit_expr_method_call(self, i);
     }
 
-    fn visit_expr_macro(&mut self, i: &'ast syn::ExprMacro) {
-        if i.mac.path.is_ident("panic") {
+    fn visit_macro(&mut self, i: &'ast syn::Macro) {
+        if i.path.is_ident("panic") {
             self.patterns.push(UnsafePattern {
                 pattern_type: PatternType::Panic,
                 snippet: quote::quote!(#i).to_string(),
-                line: 0,
+                line: i.path.span().start().line,
             });
         }
-        visit::visit_expr_macro(self, i);
+        visit::visit_macro(self, i);
     }
 }
 
@@ -1327,7 +1459,7 @@ pub mod gas_report;
 
 fn with_panic_guard<F, R>(f: F) -> R
 where
-    F: FnOnce() -> R + std::panic::AssertUnwindSafe,
+    F: FnOnce() -> R + std::panic::UnwindSafe,
     R: Default,
 {
     match std::panic::catch_unwind(f) {
