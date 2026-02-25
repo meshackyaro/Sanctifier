@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 pub mod gas_estimator;
 mod storage_collision;
 use std::collections::HashSet;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::catch_unwind;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{parse_str, Fields, File, Item, Meta, Type};
@@ -163,14 +163,21 @@ pub struct StorageCollisionIssue {
     pub message: String,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub enum EventIssueType {
+    /// Topics count varies for the same event name.
+    InconsistentSchema,
+    /// Topic could be optimized with symbol_short!.
+    OptimizableTopic,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct EventIssue {
+    pub function_name: String,
     pub event_name: String,
-    pub topic_count: usize,
-    pub location: String,
-    pub issue_type: String,
+    pub issue_type: EventIssueType,
     pub message: String,
-    pub suggestion: String,
+    pub location: String,
 }
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -544,9 +551,9 @@ impl Analyzer {
 
     fn analyze_ledger_size_impl(&self, source: &str) -> Vec<SizeWarning> {
         let limit = self.config.ledger_limit;
-        let approaching = (limit as f64 * DEFAULT_APPROACHING_THRESHOLD) as usize;
-        let strict = self.config.strict_mode;
-        let strict_threshold = limit / 2;
+        let _approaching = (limit as f64 * DEFAULT_APPROACHING_THRESHOLD) as usize;
+        let _strict = self.config.strict_mode;
+        let _strict_threshold = limit / 2;
 
         let file = match parse_str::<File>(source) {
             Ok(f) => f,
@@ -717,7 +724,7 @@ impl Analyzer {
                     .unwrap_or_else(|| format!("unknown_{}", line_num));
 
                 let location = format!("line {}", line_num + 1);
-                let location_key = format!("{}:{}", event_name, topic_count);
+                let _location_key = format!("{}:{}", event_name, topic_count);
 
                 if let Some(previous_counts) = event_schemas.get(&event_name) {
                     for &prev_count in previous_counts {
@@ -726,15 +733,14 @@ impl Analyzer {
                             if !issue_locations.contains(&issue_key) {
                                 issue_locations.insert(issue_key);
                                 issues.push(EventIssue {
+                                    function_name: "unknown".to_string(), // scan_events_impl is regex-based, function context is limited
                                     event_name: event_name.clone(),
-                                    topic_count,
-                                    location: location.clone(),
-                                    issue_type: "inconsistent_topics".to_string(),
+                                    issue_type: EventIssueType::InconsistentSchema,
                                     message: format!(
                                         "Event '{}' has inconsistent topic count. Previous: {}, Current: {}",
                                         event_name, prev_count, topic_count
                                     ),
-                                    suggestion: "Ensure the same event always uses the same number of topics.".to_string(),
+                                    location: location.clone(),
                                 });
                             }
                         }
@@ -753,12 +759,11 @@ impl Analyzer {
                         if !issue_locations.contains(&issue_key) {
                             issue_locations.insert(issue_key);
                             issues.push(EventIssue {
+                                function_name: "unknown".to_string(),
                                 event_name,
-                                topic_count,
-                                location: format!("line {}", line_num + 1),
-                                issue_type: "gas_optimization".to_string(),
+                                issue_type: EventIssueType::OptimizableTopic,
                                 message: "Consider using symbol_short! for short topic names to save gas.".to_string(),
-                                suggestion: "Replace string literals with symbol_short!(\"...\") for topics that are short (up to 9 characters).".to_string(),
+                                location: format!("line {}", line_num + 1),
                             });
                         }
                     }
@@ -972,6 +977,137 @@ impl Analyzer {
     }
 }
 
+// ── EventVisitor ──────────────────────────────────────────────────────────────
+
+struct EventVisitor {
+    issues: Vec<EventIssue>,
+    current_fn: Option<String>,
+    /// Maps event name -> number of topics found.
+    event_schemas: std::collections::HashMap<String, usize>,
+}
+
+impl<'ast> Visit<'ast> for EventVisitor {
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        let prev = self.current_fn.take();
+        self.current_fn = Some(node.sig.ident.to_string());
+        visit::visit_impl_item_fn(self, node);
+        self.current_fn = prev;
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        let prev = self.current_fn.take();
+        self.current_fn = Some(node.sig.ident.to_string());
+        visit::visit_item_fn(self, node);
+        self.current_fn = prev;
+    }
+
+    fn visit_expr_method_call(&mut self, i: &'ast syn::ExprMethodCall) {
+        let method_name = i.method.to_string();
+        if method_name == "publish" {
+            // Heuristic check for env.events().publish(topics, data)
+            if let syn::Expr::MethodCall(inner_m) = &*i.receiver {
+                if inner_m.method == "events" {
+                    if let Some(fn_name) = self.current_fn.as_ref().cloned() {
+                        self.analyze_publish_call(i, &fn_name);
+                    }
+                }
+            }
+        }
+        visit::visit_expr_method_call(self, i);
+    }
+}
+
+impl EventVisitor {
+    fn analyze_publish_call(&mut self, i: &syn::ExprMethodCall, fn_name: &str) {
+        if i.args.len() < 2 {
+            return;
+        }
+        let topics_arg = &i.args[0];
+
+        // 1. Extract event name and topic count
+        let (event_name, topic_count) = match self.extract_event_info(topics_arg) {
+            Some(info) => info,
+            None => return,
+        };
+
+        // 2. Check for schema consistency
+        if let Some(&prev_count) = self.event_schemas.get(&event_name) {
+            if prev_count != topic_count {
+                self.issues.push(EventIssue {
+                    function_name: fn_name.to_string(),
+                    event_name: event_name.clone(),
+                    issue_type: EventIssueType::InconsistentSchema,
+                    message: format!(
+                        "Inconsistent topic count for event '{}': expected {}, found {}",
+                        event_name, prev_count, topic_count
+                    ),
+                    location: format!("{}:{}", fn_name, topics_arg.span().start().line),
+                });
+            }
+        } else {
+            self.event_schemas.insert(event_name.clone(), topic_count);
+        }
+
+        // 3. Check for optimizable topics (bare string literals)
+        self.check_optimizable_topics(topics_arg, fn_name, &event_name);
+    }
+
+    fn extract_event_info(&self, topics: &syn::Expr) -> Option<(String, usize)> {
+        match topics {
+            syn::Expr::Tuple(t) => {
+                if let Some(syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(s),
+                    ..
+                })) = t.elems.first()
+                {
+                    return Some((s.value(), t.elems.len()));
+                }
+            }
+            syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) => {
+                return Some((s.value(), 1));
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn check_optimizable_topics(&mut self, topics: &syn::Expr, fn_name: &str, event_name: &str) {
+        let check_lit = |expr: &syn::Expr, issues: &mut Vec<EventIssue>| {
+            if let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = expr
+            {
+                let val = s.value();
+                if val.len() <= 10 {
+                    issues.push(EventIssue {
+                        function_name: fn_name.to_string(),
+                        event_name: event_name.to_string(),
+                        issue_type: EventIssueType::OptimizableTopic,
+                        message: format!(
+                            "Topic \"{}\" can be optimized using `symbol_short!(\"{}\")`",
+                            val, val
+                        ),
+                        location: format!("{}:{}", fn_name, expr.span().start().line),
+                    });
+                }
+            }
+        };
+
+        match topics {
+            syn::Expr::Tuple(t) => {
+                for elem in &t.elems {
+                    check_lit(elem, &mut self.issues);
+                }
+            }
+            _ => check_lit(topics, &mut self.issues),
+        }
+    }
+}
+
 // ── UnsafeVisitor ─────────────────────────────────────────────────────────────
 
 struct UnsafeVisitor {
@@ -1001,7 +1137,7 @@ impl<'ast> Visit<'ast> for UnsafeVisitor {
             self.patterns.push(UnsafePattern {
                 pattern_type: PatternType::Panic,
                 snippet: quote::quote!(#i).to_string(),
-                line: 0,
+                line: i.path.span().start().line,
             });
         }
         visit::visit_macro(self, i);
@@ -1521,7 +1657,9 @@ mod tests {
         "#;
         let issues = analyzer.scan_events(source);
         assert!(!issues.is_empty());
-        assert!(issues.iter().any(|i| i.issue_type == "inconsistent_topics"));
+        assert!(issues
+            .iter()
+            .any(|i| i.issue_type == EventIssueType::InconsistentSchema));
     }
 
     #[test]
@@ -1536,6 +1674,8 @@ mod tests {
             }
         "#;
         let issues = analyzer.scan_events(source);
-        assert!(issues.iter().any(|i| i.issue_type == "gas_optimization"));
+        assert!(issues
+            .iter()
+            .any(|i| i.issue_type == EventIssueType::OptimizableTopic));
     }
 }

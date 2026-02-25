@@ -42,7 +42,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Init(args) => {
-            commands::init::exec(args)?;
+            commands::init::exec(args, None)?;
         }
     }
 

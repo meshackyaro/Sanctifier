@@ -3,9 +3,8 @@ use quote::quote;
 use std::collections::HashMap;
 use syn::spanned::Spanned;
 use syn::{
-    parse_str,
     visit::{self, Visit},
-    Expr, ExprCall, ExprMacro, File, ItemConst, Lit, Meta,
+    Expr, ExprCall, ExprMacro, ItemConst, Lit,
 };
 
 pub struct StorageVisitor {
@@ -15,7 +14,7 @@ pub struct StorageVisitor {
 
 #[derive(Clone)]
 pub struct KeyInfo {
-    pub value: String,
+    pub _value: String,
     pub key_type: String,
     pub location: String,
     pub line: usize,
@@ -31,7 +30,7 @@ impl StorageVisitor {
 
     fn add_key(&mut self, value: String, key_type: String, location: String, line: usize) {
         let info = KeyInfo {
-            value: value.clone(),
+            _value: value.clone(),
             key_type,
             location,
             line,

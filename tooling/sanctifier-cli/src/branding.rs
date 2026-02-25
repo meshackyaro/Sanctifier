@@ -28,7 +28,3 @@ pub fn print_logo() {
     );
     println!();
 }
-
-pub fn print_banner(title: &str) {
-    println!("{}", format!("━━━ {} ━━━", title).yellow().bold());
-}
