@@ -1,6 +1,4 @@
-use amm_pool::{
-    calculate_liquidity_burn, calculate_liquidity_mint, calculate_swap_output,
-};
+use amm_pool::{calculate_liquidity_burn, calculate_liquidity_mint, calculate_swap_output};
 use proptest::prelude::*;
 
 /// Simple integer square root (same as in lib.rs)
@@ -8,15 +6,15 @@ fn integer_sqrt(n: u128) -> u128 {
     if n == 0 {
         return 0;
     }
-    
+
     let mut x = n;
     let mut y = (x + 1) / 2;
-    
+
     while y < x {
         x = y;
         y = (x + n / x) / 2;
     }
-    
+
     x
 }
 
@@ -32,7 +30,7 @@ proptest! {
         fee_bps in 0u128..10000u128,
     ) {
         let result = calculate_swap_output(reserve_in, reserve_out, amount_in, fee_bps);
-        
+
         // Should either succeed or fail gracefully with an error
         match result {
             Ok(output) => {
@@ -58,13 +56,13 @@ proptest! {
         if let Ok(amount_out) = calculate_swap_output(reserve_in, reserve_out, amount_in, fee_bps) {
             // Calculate k before and after
             let k_before = reserve_in.checked_mul(reserve_out);
-            
+
             let new_reserve_in = reserve_in.checked_add(amount_in);
             let new_reserve_out = reserve_out.checked_sub(amount_out);
-            
+
             if let (Some(k_before), Some(new_in), Some(new_out)) = (k_before, new_reserve_in, new_reserve_out) {
                 let k_after = new_in.checked_mul(new_out);
-                
+
                 if let Some(k_after) = k_after {
                     // k should increase or stay the same (due to fees)
                     prop_assert!(k_after >= k_before);
@@ -84,7 +82,7 @@ proptest! {
     ) {
         let output_1 = calculate_swap_output(reserve_in, reserve_out, amount_in_1, fee_bps);
         let output_2 = calculate_swap_output(reserve_in, reserve_out, amount_in_2, fee_bps);
-        
+
         if let (Ok(out1), Ok(out2)) = (output_1, output_2) {
             // Larger input should yield larger output
             prop_assert!(out2 > out1);
@@ -110,7 +108,7 @@ proptest! {
     ) {
         let result1 = calculate_swap_output(0, 1000, amount_in, fee_bps);
         let result2 = calculate_swap_output(1000, 0, amount_in, fee_bps);
-        
+
         prop_assert!(result1.is_err());
         prop_assert!(result2.is_err());
     }
@@ -126,7 +124,7 @@ proptest! {
         amount_b in 1u128..=u64::MAX as u128,
     ) {
         let result = calculate_liquidity_mint(0, 0, amount_a, amount_b, 0);
-        
+
         match result {
             Ok(liquidity) => {
                 // Liquidity should be positive
@@ -155,7 +153,7 @@ proptest! {
         total_supply in 1u128..1_000_000u128,
     ) {
         let result = calculate_liquidity_mint(reserve_a, reserve_b, amount_a, amount_b, total_supply);
-        
+
         match result {
             Ok(liquidity) => {
                 // Liquidity should be positive
@@ -181,19 +179,19 @@ proptest! {
         let amount_b = (amount_a.checked_mul(reserve_b).unwrap_or(0))
             .checked_div(reserve_a)
             .unwrap_or(0);
-        
+
         if amount_b > 0 {
             let result = calculate_liquidity_mint(reserve_a, reserve_b, amount_a, amount_b, total_supply);
-            
+
             if let Ok(liquidity) = result {
                 // Liquidity should be positive
                 prop_assert!(liquidity > 0);
-                
+
                 // Liquidity should be roughly proportional - within an order of magnitude
                 let expected_liquidity = (amount_a.checked_mul(total_supply).unwrap_or(0))
                     .checked_div(reserve_a)
                     .unwrap_or(0);
-                
+
                 if expected_liquidity > 0 {
                     // Verify liquidity is within reasonable bounds (not off by orders of magnitude)
                     prop_assert!(liquidity > 0);
@@ -213,9 +211,9 @@ proptest! {
     ) {
         // Ensure liquidity doesn't exceed total supply
         let liquidity = liquidity.min(total_supply);
-        
+
         let result = calculate_liquidity_burn(reserve_a, reserve_b, liquidity, total_supply);
-        
+
         match result {
             Ok((amount_a, amount_b)) => {
                 // Amounts should be positive
@@ -251,10 +249,10 @@ proptest! {
             let new_reserve_a = reserve_a.checked_add(amount_a);
             let new_reserve_b = reserve_b.checked_add(amount_b);
             let new_total_supply = total_supply.checked_add(liquidity_minted);
-            
-            if let (Some(new_a), Some(new_b), Some(new_supply)) = 
+
+            if let (Some(new_a), Some(new_b), Some(new_supply)) =
                 (new_reserve_a, new_reserve_b, new_total_supply) {
-                
+
                 // Remove the same liquidity
                 if let Ok((removed_a, removed_b)) = calculate_liquidity_burn(
                     new_a,
@@ -265,12 +263,12 @@ proptest! {
                     // Verify amounts are positive
                     prop_assert!(removed_a > 0);
                     prop_assert!(removed_b > 0);
-                    
+
                     // Verify amounts are reasonable (within same order of magnitude)
                     // Due to integer division rounding, exact equality is not guaranteed
                     prop_assert!(removed_a <= amount_a * 2);
                     prop_assert!(removed_b <= amount_b * 2);
-                    
+
                     // Verify we don't get back way more than we put in
                     prop_assert!(removed_a < amount_a + amount_a / 2);
                     prop_assert!(removed_b < amount_b + amount_b / 2);
@@ -317,7 +315,7 @@ proptest! {
     ) {
         // This should either succeed or fail gracefully
         let result = calculate_swap_output(reserve_in, reserve_out, amount_in, fee_bps);
-        
+
         // We just verify it doesn't panic
         match result {
             Ok(_) | Err(_) => {}
@@ -333,10 +331,10 @@ proptest! {
     ) {
         let high_fee = 9999; // 99.99%
         let low_fee = 30;    // 0.3%
-        
+
         let high_fee_output = calculate_swap_output(reserve_in, reserve_out, amount_in, high_fee);
         let low_fee_output = calculate_swap_output(reserve_in, reserve_out, amount_in, low_fee);
-        
+
         if let (Ok(high_out), Ok(low_out)) = (high_fee_output, low_fee_output) {
             // High fee should result in much lower output
             prop_assert!(high_out < low_out);

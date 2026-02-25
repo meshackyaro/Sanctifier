@@ -47,9 +47,7 @@ pub fn calculate_swap_output(
         return Err("Denominator is zero");
     }
 
-    let output = numerator
-        .checked_div(denominator)
-        .ok_or("Division error")?;
+    let output = numerator.checked_div(denominator).ok_or("Division error")?;
 
     Ok(output)
 }
@@ -73,14 +71,14 @@ pub fn calculate_liquidity_mint(
         let product = amount_a
             .checked_mul(amount_b)
             .ok_or("Initial liquidity overflow")?;
-        
+
         // Simple sqrt approximation for initial liquidity
         let liquidity = integer_sqrt(product);
-        
+
         if liquidity == 0 {
             return Err("Initial liquidity too small");
         }
-        
+
         return Ok(liquidity);
     }
 
@@ -158,15 +156,15 @@ fn integer_sqrt(n: u128) -> u128 {
     if n == 0 {
         return 0;
     }
-    
+
     let mut x = n;
     let mut y = (x + 1) / 2;
-    
+
     while y < x {
         x = y;
         y = (x + n / x) / 2;
     }
-    
+
     x
 }
 
