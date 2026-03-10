@@ -54,6 +54,37 @@ Run the analysis suite on your Soroban project:
 sanctifier analyze ./contracts/my-token
 ```
 
+#### Sample Output
+
+When you run an analysis, Sanctifier displays security findings and recommendations:
+
+```
+✨ Sanctifier: Valid Soroban project found at "./contracts/my-token"
+🔍 Analyzing contract at "./contracts/my-token"...
+✅ Static analysis complete.
+
+🛑 Found potential Authentication Gaps!
+   -> Function `transfer` is modifying state without require_auth()
+
+🛑 Found explicit Panics/Unwraps!
+   -> Function `mint`: Using `unwrap` (Location: src/lib.rs:transfer)
+   💡 Tip: Prefer returning Result or Error types for better contract safety.
+
+🔢 Found unchecked Arithmetic Operations!
+   -> Function `compound_interest`: Unchecked `+` (src/lib.rs:compound_interest)
+      💡 Use checked_add() or saturating_add() to prevent overflow.
+
+⚠️  Found Ledger Size Warnings!
+   LargeState approaches the ledger entry size limit!
+      Estimated size: 68200 bytes (Limit: 64000 bytes)
+
+🔄 Upgrade Pattern Analysis
+   -> [missing_init] Contract has upgrade mechanism but no init function (src/lib.rs:42)
+      💡 Add an init() function to set post-upgrade state safely.
+```
+
+For detailed explanations of each finding type and how to fix them, see [docs/getting-started.md](docs/getting-started.md#5-example-output--what-developers-see).
+
 ### Notify Webhooks on Scan Completion
 Send scan completion notifications to one or more webhook endpoints:
 
