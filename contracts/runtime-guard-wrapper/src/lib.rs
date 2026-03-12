@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(unexpected_cfgs)]
 
 //! Runtime Guard Wrapper Contract
 //! 
@@ -12,7 +13,7 @@
 //! - Gas and performance metrics collection
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, Address, Env, Error, Host, IntoVal, Symbol,
+    contract, contractimpl, Address, Env, Error, IntoVal, Symbol,
     Val, Vec,
 };
 
@@ -86,7 +87,7 @@ impl RuntimeGuardWrapper {
         // Initialize logging
         env.storage()
             .persistent()
-            .set(&Symbol::new(&env, CALL_LOG), &Vec::new(&env));
+            .set(&Symbol::new(&env, CALL_LOG), &Vec::<Symbol>::new(&env));
 
         env.storage()
             .persistent()
@@ -94,13 +95,13 @@ impl RuntimeGuardWrapper {
 
         env.storage()
             .persistent()
-            .set(&Symbol::new(&env, GUARD_FAILURES), &Vec::new(&env));
+            .set(&Symbol::new(&env, GUARD_FAILURES), &Vec::<Symbol>::new(&env));
 
         env.storage()
             .persistent()
-            .set(&Symbol::new(&env, EXECUTION_METRICS), &Vec::new(&env));
+            .set(&Symbol::new(&env, EXECUTION_METRICS), &Vec::<(u32, bool, u64, u64)>::new(&env));
 
-        Self::emit_guard_event(&env, "wrapper_initialized", "success");
+        Self::emit_guard_event(env, "wrapper_initialized", "success");
     }
 
     /// Get the wrapped contract address
@@ -114,50 +115,50 @@ impl RuntimeGuardWrapper {
     /// Execute a function with runtime guards enabled
     pub fn execute_guarded(env: Env, function_name: Symbol, args: Vec<Val>) -> Result<Val, Error> {
         // Pre-execution guards
-        Self::pre_execution_guards(&env)?;
+        Self::pre_execution_guards(env.clone())?;
 
         // Execute the wrapped contract (simulated for testnet validation)
-        let result = Self::execute_with_monitoring(&env, &function_name, &args)?;
+        let result = Self::execute_with_monitoring(env.clone(), &function_name, &args)?;
 
         // Post-execution guards
-        Self::post_execution_guards(&env)?;
+        Self::post_execution_guards(env.clone())?;
 
         // Log the execution
-        Self::log_execution(&env, &function_name, &result);
+        Self::log_execution(env.clone(), &function_name, &result);
 
         Ok(result)
     }
 
     /// Pre-execution validation guards
-    fn pre_execution_guards(env: &Env) -> Result<(), Error> {
+    fn pre_execution_guards(env: Env) -> Result<(), Error> {
         // Check invariant: wrapped contract should be set
         let wrapped = env.storage().instance().get::<Symbol, Address>(
             &Symbol::new(&env, WRAPPED_CONTRACT_ADDRESS),
         );
         if wrapped.is_none() {
-            Self::emit_guard_event(&env, "pre_exec_guard", "wrapped_contract_not_set");
+            Self::emit_guard_event(env, "pre_exec_guard", "wrapped_contract_not_set");
             return Err(Error::from_contract_error(1));
         }
 
         // Check invariant: storage should not be corrupted
-        Self::validate_storage_integrity(&env)?;
+        Self::validate_storage_integrity(env.clone())?;
 
         Ok(())
     }
 
     /// Post-execution validation guards
-    fn post_execution_guards(env: &Env) -> Result<(), Error> {
+    fn post_execution_guards(env: Env) -> Result<(), Error> {
         // Verify storage invariants maintained
-        Self::verify_storage_invariants(&env)?;
+        Self::verify_storage_invariants(env.clone())?;
 
         // Emit successful guard check event
-        Self::emit_guard_event(&env, "post_exec_guard", "passed");
+        Self::emit_guard_event(env, "post_exec_guard", "passed");
 
         Ok(())
     }
 
     /// Validate that storage integrity is maintained
-    fn validate_storage_integrity(env: &Env) -> Result<(), Error> {
+    fn validate_storage_integrity(env: Env) -> Result<(), Error> {
         // Check critical storage keys exist
         let instance_storage = env.storage().instance();
 
@@ -173,7 +174,7 @@ impl RuntimeGuardWrapper {
     }
 
     /// Verify storage invariants post-execution
-    fn verify_storage_invariants(env: &Env) -> Result<(), Error> {
+    fn verify_storage_invariants(env: Env) -> Result<(), Error> {
         let persistent = env.storage().persistent();
 
         // Record that invariants were checked
@@ -191,7 +192,7 @@ impl RuntimeGuardWrapper {
 
     /// Execute with metrics and monitoring
     fn execute_with_monitoring(
-        env: &Env,
+        env: Env,
         function_name: &Symbol,
         _args: &Vec<Val>,
     ) -> Result<Val, Error> {
@@ -206,7 +207,8 @@ impl RuntimeGuardWrapper {
         let _end_tick = env.ledger().timestamp();
 
         // Generate execution hash (simplified for testnet)
-        let call_hash = (function_name.clone().into_val(&env).as_raw().get_payload().wrapping_mul(31)
+        let val: Val = function_name.clone().into_val(&env);
+        let call_hash = (val.get_payload().wrapping_mul(31)
             ^ start_tick.wrapping_mul(17)) as u32;
 
         // Store execution metrics
@@ -217,13 +219,13 @@ impl RuntimeGuardWrapper {
             gas_used: 0,
         };
 
-        Self::record_metrics(&env, metrics);
+        Self::record_metrics(env, metrics);
 
         Ok(result)
     }
 
     /// Log execution details for audit trail
-    fn log_execution(env: &Env, function_name: &Symbol, _result: &Val) {
+    fn log_execution(env: Env, function_name: &Symbol, _result: &Val) {
         let persistent = env.storage().persistent();
         let call_log_symbol = Symbol::new(&env, CALL_LOG);
 
@@ -237,18 +239,21 @@ impl RuntimeGuardWrapper {
 
         // Keep only last 100 entries to avoid unbounded growth
         if log.len() > 100 {
-            // Truncate old entries (simplified - in production use a circular buffer)
-            let truncated: Vec<Symbol> = log.iter().skip(1).collect();
-            persistent.set(&call_log_symbol, &truncated);
+            // Keep only last 100 entries
+            let mut new_log = Vec::new(&env);
+            for item in log.iter().skip(1usize) {
+                new_log.push_back(item);
+            }
+            persistent.set(&call_log_symbol, &new_log);
         } else {
             persistent.set(&call_log_symbol, &log);
         }
 
-        Self::emit_guard_event(&env, "execution_logged", "success");
+        Self::emit_guard_event(env, "execution_logged", "success");
     }
 
     /// Record execution metrics
-    fn record_metrics(env: &Env, metrics: ExecutionMetrics) {
+    fn record_metrics(env: Env, metrics: ExecutionMetrics) {
         let persistent = env.storage().persistent();
         let metrics_symbol = Symbol::new(&env, EXECUTION_METRICS);
 
@@ -265,8 +270,10 @@ impl RuntimeGuardWrapper {
 
         if metrics_vec.len() > 1000 {
             // Keep last 1000 entries
-            let truncated: Vec<(u32, bool, u64, u64)> =
-                metrics_vec.iter().skip(metrics_vec.len() - 1000).collect();
+            let mut truncated = Vec::new(&env);
+            for item in metrics_vec.iter().skip((metrics_vec.len() - 1000) as usize) {
+                truncated.push_back(item);
+            }
             persistent.set(&metrics_symbol, &truncated);
         } else {
             persistent.set(&metrics_symbol, &metrics_vec);
@@ -274,7 +281,7 @@ impl RuntimeGuardWrapper {
     }
 
     /// Emit a guard event for monitoring
-    fn emit_guard_event(env: &Env, event_name: &str, status: &str) {
+    fn emit_guard_event(env: Env, event_name: &str, status: &str) {
         env.events().publish(
             (Symbol::new(&env, "guard_wrapper"),),
             (
@@ -302,8 +309,8 @@ impl RuntimeGuardWrapper {
 
         (
             invariants_checked,
-            call_log.len() as u32,
-            guard_failures.len() as u32,
+            call_log.len(),
+            guard_failures.len(),
         )
     }
 
