@@ -1417,7 +1417,24 @@ impl UnhandledResultVisitor {
                         | "err"
                         | "is_ok"
                         | "is_err"
+                        | "map"
+                        | "map_err"
+                        | "and_then"
+                        | "or_else"
+                        | "unwrap_unchecked"
+                        | "expect_unchecked"
                 )
+            }
+            syn::Expr::Assign(a) => Self::is_handled(&a.right),
+            syn::Expr::Call(c) => {
+                if let syn::Expr::Path(p) = &*c.func {
+                    if let Some(seg) = p.path.segments.last() {
+                        if seg.ident == "Ok" || seg.ident == "Err" {
+                            return true;
+                        }
+                    }
+                }
+                false
             }
             _ => false,
         }
@@ -1868,7 +1885,7 @@ mod tests {
             }
         "#;
         let issues = analyzer.scan_unhandled_results(source);
-        assert!(issues.is_empty());
+        assert_eq!(issues.len(), 0, "{:?}", issues);
     }
 
     #[test]
@@ -1887,7 +1904,7 @@ mod tests {
             }
         "#;
         let issues = analyzer.scan_unhandled_results(source);
-        assert!(issues.is_empty());
+        assert_eq!(issues.len(), 0, "{:?}", issues);
     }
 
     #[test]
@@ -1906,7 +1923,7 @@ mod tests {
             }
         "#;
         let issues = analyzer.scan_unhandled_results(source);
-        assert!(issues.is_empty());
+        assert_eq!(issues.len(), 0, "{:?}", issues);
     }
 
     #[test]
@@ -1928,7 +1945,7 @@ mod tests {
             }
         "#;
         let issues = analyzer.scan_unhandled_results(source);
-        assert!(issues.is_empty());
+        assert_eq!(issues.len(), 0, "{:?}", issues);
     }
 
     #[test]
@@ -1947,7 +1964,7 @@ mod tests {
             }
         "#;
         let issues = analyzer.scan_unhandled_results(source);
-        assert!(issues.is_empty());
+        assert_eq!(issues.len(), 0, "{:?}", issues);
     }
 
     #[test]
@@ -1965,7 +1982,7 @@ mod tests {
             }
         "#;
         let issues = analyzer.scan_unhandled_results(source);
-        assert!(issues.is_empty());
+        assert_eq!(issues.len(), 0, "{:?}", issues);
     }
 
     #[test]
@@ -2021,7 +2038,7 @@ mod tests {
             }
         "#;
         let issues = analyzer.scan_unhandled_results(source);
-        assert!(issues.is_empty());
+        assert_eq!(issues.len(), 0, "{:?}", issues);
     }
 
     #[test]
@@ -2040,7 +2057,7 @@ mod tests {
             }
         "#;
         let issues = analyzer.scan_unhandled_results(source);
-        assert!(issues.is_empty());
+        assert_eq!(issues.len(), 0, "{:?}", issues);
     }
 
     #[test]
@@ -2048,7 +2065,7 @@ mod tests {
         let analyzer = Analyzer::new(SanctifyConfig::default());
         let source = "";
         let issues = analyzer.scan_unhandled_results(source);
-        assert!(issues.is_empty());
+        assert_eq!(issues.len(), 0, "{:?}", issues);
     }
 
     #[test]
@@ -2056,7 +2073,7 @@ mod tests {
         let analyzer = Analyzer::new(SanctifyConfig::default());
         let source = "this is not valid rust";
         let issues = analyzer.scan_unhandled_results(source);
-        assert!(issues.is_empty());
+        assert_eq!(issues.len(), 0, "{:?}", issues);
     }
 
     #[test]
