@@ -69,6 +69,10 @@ sanctifier deploy contracts/runtime-guard-wrapper \
 
 See [QUICK_START.md](QUICK_START.md) for setup instructions and [SOROBAN_DEPLOYMENT.md](SOROBAN_DEPLOYMENT.md) for complete deployment guide.
 
+## Case Studies
+Sanctifier is now benchmarked against the official Soroban examples repository.
+See [docs/case-studies/soroban-examples.md](docs/case-studies/soroban-examples.md) for the current baseline results and follow-up precision work.
+
 ## 🤝 Contributing
 We welcome contributions from the Stellar community! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
