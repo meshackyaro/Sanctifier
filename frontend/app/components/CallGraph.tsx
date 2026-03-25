@@ -71,7 +71,7 @@ export function CallGraph({ nodes, edges }: CallGraphProps) {
           Contract Call Graph
         </h3>
         <p className="text-sm text-zinc-500 dark:text-zinc-400 text-center py-8">
-          No call path data available. Load a report with auth gap or function analysis data.
+          No cross-contract call paths were reported for this scan.
         </p>
       </div>
     );

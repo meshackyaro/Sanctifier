@@ -135,7 +135,7 @@ export default function DashboardPage() {
     }
   }, [applyReport]);
 
-  const hasData = findings.length > 0;
+  const hasData = findings.length > 0 || callGraphNodes.length > 0 || callGraphEdges.length > 0;
   const hasLoadedReport = jsonInput.trim().length > 0;
 
   return (

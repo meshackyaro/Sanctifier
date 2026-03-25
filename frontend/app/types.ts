@@ -32,6 +32,15 @@ export interface CustomRuleMatch {
   snippet: string;
 }
 
+export interface CallGraphReportEdge {
+  caller: string;
+  callee: string;
+  file: string;
+  line: number;
+  contract_id_expr: string;
+  function_expr?: string | null;
+}
+
 export interface AnalysisReport {
   size_warnings?: SizeWarning[];
   unsafe_patterns?: UnsafePattern[];
@@ -39,6 +48,7 @@ export interface AnalysisReport {
   panic_issues?: PanicIssue[];
   arithmetic_issues?: ArithmeticIssue[];
   custom_rule_matches?: CustomRuleMatch[];
+  call_graph?: CallGraphReportEdge[];
 }
 
 export interface Finding {

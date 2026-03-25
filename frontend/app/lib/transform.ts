@@ -1,4 +1,11 @@
-import type { AnalysisReport, CallGraphEdge, CallGraphNode, Finding, Severity } from "../types";
+import type {
+  AnalysisReport,
+  CallGraphEdge,
+  CallGraphNode,
+  CallGraphReportEdge,
+  Finding,
+  Severity,
+} from "../types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -32,6 +39,14 @@ export function normalizeReport(input: unknown): AnalysisReport {
     custom_rule_matches: arrayValue(
       findings.custom_rule_matches ?? findings.custom_rules
     ),
+    call_graph: arrayValue<CallGraphReportEdge>(parsed.call_graph).filter((edge) => {
+      return isRecord(edge)
+        && typeof edge.caller === "string"
+        && typeof edge.callee === "string"
+        && typeof edge.file === "string"
+        && typeof edge.line === "number"
+        && typeof edge.contract_id_expr === "string";
+    }),
   };
 }
 
@@ -150,6 +165,10 @@ export function transformReport(report: AnalysisReport): Finding[] {
 export function extractCallGraph(
   report: AnalysisReport
 ): { nodes: CallGraphNode[]; edges: CallGraphEdge[] } {
+  if (report.call_graph && report.call_graph.length > 0) {
+    return extractReportedCallGraph(report.call_graph);
+  }
+
   const nodeMap = new Map<string, CallGraphNode>();
   const edges: CallGraphEdge[] = [];
 
@@ -213,6 +232,46 @@ export function extractCallGraph(
         severity: "high",
       });
     }
+  });
+
+  return { nodes: Array.from(nodeMap.values()), edges };
+}
+
+function extractReportedCallGraph(
+  reportedEdges: CallGraphReportEdge[]
+): { nodes: CallGraphNode[]; edges: CallGraphEdge[] } {
+  const nodeMap = new Map<string, CallGraphNode>();
+  const edges: CallGraphEdge[] = [];
+
+  reportedEdges.forEach((edge) => {
+    const sourceId = `fn-${edge.caller}`;
+    const targetId = `external-${edge.callee}`;
+
+    if (!nodeMap.has(sourceId)) {
+      nodeMap.set(sourceId, {
+        id: sourceId,
+        label: edge.caller,
+        type: "function",
+        file: edge.file,
+      });
+    }
+
+    if (!nodeMap.has(targetId)) {
+      nodeMap.set(targetId, {
+        id: targetId,
+        label: edge.callee,
+        type: "external",
+      });
+    }
+
+    edges.push({
+      source: sourceId,
+      target: targetId,
+      label: edge.function_expr
+        ? `${edge.function_expr} (${edge.file}:${edge.line})`
+        : `${edge.file}:${edge.line}`,
+      type: "calls",
+    });
   });
 
   return { nodes: Array.from(nodeMap.values()), edges };

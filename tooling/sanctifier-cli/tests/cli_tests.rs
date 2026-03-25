@@ -346,7 +346,53 @@ fn test_callgraph_generates_dot_for_invoke_contract_calls() {
     let dot = fs::read_to_string(&dot_path).unwrap();
     assert!(dot.contains("digraph ContractCallGraph"));
     assert!(dot.contains("\"Router\" -> \"target\""));
-assert!(dot.contains("fn_name"));
+    assert!(dot.contains("fn_name"));
+}
+
+#[test]
+fn test_analyze_json_includes_call_graph_edges() {
+    let temp_dir = tempdir().unwrap();
+    let contract_path = temp_dir.path().join("router.rs");
+
+    fs::write(
+        &contract_path,
+        r#"
+            use soroban_sdk::{contract, contractimpl, Address, Env, Symbol};
+
+            #[contract]
+            pub struct Router;
+
+            #[contractimpl]
+            impl Router {
+                pub fn forward(env: Env, target: Address, to: Address, amount: i128) {
+                    let fn_name = Symbol::new(&env, "transfer");
+                    env.invoke_contract::<()>(target, &fn_name, (&to, &amount));
+                }
+            }
+        "#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("sanctifier")
+        .unwrap()
+        .arg("analyze")
+        .arg(&contract_path)
+        .arg("--format")
+        .arg("json")
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("sanctifier should run");
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    let payload: serde_json::Value = serde_json::from_str(&stdout).expect("stdout should be JSON");
+    let call_graph = payload["call_graph"]
+        .as_array()
+        .expect("call_graph should be an array");
+
+    assert_eq!(call_graph.len(), 1);
+    assert_eq!(call_graph[0]["caller"], "Router");
+    assert_eq!(call_graph[0]["callee"], "target");
+    assert_eq!(call_graph[0]["function_expr"], "fn_name");
 }
 /// Verifies that `sanctifier analyze --format json` output conforms to the
 /// published JSON Schema at `schemas/analysis-output.json`.

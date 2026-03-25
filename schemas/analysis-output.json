@@ -181,6 +181,11 @@
       "description": "Raw storage-collision structs (same data as findings.storage_collisions but without the code field).",
       "items": { "$ref": "#/definitions/StorageCollisionIssue" }
     },
+    "call_graph": {
+      "type": "array",
+      "description": "Raw cross-contract call graph edges collected from env.invoke_contract usage.",
+      "items": { "$ref": "#/definitions/ContractCallEdge" }
+    },
     "ledger_size_warnings": {
       "type": "array",
       "description": "Raw ledger-size-warning structs.",
@@ -257,6 +262,19 @@
     }
   },
   "definitions": {
+    "ContractCallEdge": {
+      "type": "object",
+      "required": ["caller", "callee", "file", "line", "contract_id_expr", "function_expr"],
+      "additionalProperties": false,
+      "properties": {
+        "caller": { "type": "string" },
+        "callee": { "type": "string" },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "contract_id_expr": { "type": "string" },
+        "function_expr": { "type": ["string", "null"] }
+      }
+    },
     "FindingCode": {
       "type": "object",
       "description": "A single entry in the Sanctifier finding-code catalogue.",

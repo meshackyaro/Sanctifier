@@ -5,7 +5,7 @@ use clap::Args;
 use colored::*;
 use rayon::prelude::*;
 use sanctifier_core::finding_codes;
-use sanctifier_core::{Analyzer, SanctifyConfig, SizeWarningLevel};
+use sanctifier_core::{Analyzer, ContractCallEdge, SanctifyConfig, SizeWarningLevel};
 use serde_json;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,6 +49,7 @@ pub struct AnalyzeArgs {
 #[derive(Default)]
 pub(crate) struct FileAnalysisResult {
     pub(crate) file_path: String,
+    pub(crate) call_graph: Vec<ContractCallEdge>,
     pub(crate) collisions: Vec<sanctifier_core::StorageCollisionIssue>,
     pub(crate) size_warnings: Vec<sanctifier_core::SizeWarning>,
     pub(crate) unsafe_patterns: Vec<sanctifier_core::UnsafePattern>,
@@ -200,6 +201,7 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
 
     // ── Phase 4: merge into flat vectors ─────────────────────────────────
     let mut collisions = Vec::new();
+    let mut call_graph = Vec::new();
     let mut size_warnings = Vec::new();
     let mut unsafe_patterns = Vec::new();
     let mut auth_gaps = Vec::new();
@@ -219,6 +221,7 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
         if r.timed_out {
             timed_out_files.push(r.file_path.clone());
         }
+        call_graph.extend(r.call_graph);
         collisions.extend(r.collisions);
         size_warnings.extend(r.size_warnings);
         unsafe_patterns.extend(r.unsafe_patterns);
@@ -283,6 +286,7 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
         let report = serde_json::json!({
             "schema_version": "1.0.0",
             "storage_collisions": collisions,
+            "call_graph": call_graph,
             "ledger_size_warnings": size_warnings,
             "unsafe_patterns": unsafe_patterns,
             "auth_gaps": auth_gaps,
@@ -654,8 +658,16 @@ pub(crate) fn analyze_single_file(
     content: &str,
     file_name: &str,
 ) -> FileAnalysisResult {
+    let contract_name = infer_contract_name(content).unwrap_or_else(|| {
+        Path::new(file_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("<unknown>")
+            .to_string()
+    });
     let mut res = FileAnalysisResult {
         file_path: file_name.to_string(),
+        call_graph: analyzer.scan_invoke_contract_calls(content, &contract_name, file_name),
         ..Default::default()
     };
 
@@ -731,6 +743,37 @@ pub(crate) fn analyze_single_file(
     }
 
     res
+}
+
+fn infer_contract_name(source: &str) -> Option<String> {
+    let mut saw_contract_attr = false;
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("#[contract]") {
+            saw_contract_attr = true;
+            continue;
+        }
+        if !saw_contract_attr {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("pub struct ") {
+            return Some(
+                rest.trim_end_matches(';')
+                    .split_whitespace()
+                    .next()?
+                    .to_string(),
+            );
+        }
+        if let Some(rest) = trimmed.strip_prefix("struct ") {
+            return Some(
+                rest.trim_end_matches(';')
+                    .split_whitespace()
+                    .next()?
+                    .to_string(),
+            );
+        }
+    }
+    None
 }
 
 // ── Per-file timeout wrapper ─────────────────────────────────────────────────
