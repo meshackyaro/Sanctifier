@@ -2,7 +2,7 @@ import Link from "next/link";
 
 export default function Home() {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 dark:bg-zinc-950 font-sans">
+    <div className="flex min-h-[calc(100vh-64px)] flex-col items-center justify-center bg-zinc-50 dark:bg-zinc-950 font-sans">
       <main className="flex flex-col items-center gap-8 px-6">
         <h1 className="text-4xl font-bold text-zinc-900 dark:text-zinc-50">
           Sanctifier

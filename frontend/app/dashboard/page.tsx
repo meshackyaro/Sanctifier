@@ -9,8 +9,6 @@ import { FindingsList } from "../components/FindingsList";
 import { SummaryChart } from "../components/SummaryChart";
 import { SanctityScore } from "../components/SanctityScore";
 import { CallGraph } from "../components/CallGraph";
-import { ThemeToggle } from "../components/ThemeToggle";
-import Link from "next/link";
 
 const SAMPLE_JSON = `{
   "size_warnings": [],
@@ -142,24 +140,6 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 theme-high-contrast:bg-black theme-high-contrast:text-white">
-      <header className="border-b border-zinc-200 dark:border-zinc-800 theme-high-contrast:border-b-white bg-white dark:bg-zinc-900 theme-high-contrast:bg-black px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-4 sm:gap-6">
-          <Link href="/" className="font-bold text-lg theme-high-contrast:text-yellow-300 whitespace-nowrap">
-            Sanctifier
-          </Link>
-          <span className="text-zinc-500 dark:text-zinc-400 theme-high-contrast:text-white text-sm sm:text-base">Security Dashboard</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <Link
-            href="/terminal"
-            className="text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-zinc-50 transition-colors"
-          >
-            Live Terminal
-          </Link>
-          <ThemeToggle />
-        </div>
-      </header>
-
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-8">
         <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 theme-high-contrast:border-white bg-white dark:bg-zinc-900 theme-high-contrast:bg-black p-6">
           <h2 className="text-lg font-semibold mb-4 theme-high-contrast:text-yellow-300">Load Analysis Report</h2>
