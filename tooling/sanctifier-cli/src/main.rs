@@ -27,6 +27,8 @@ pub enum Commands {
     Badge(commands::badge::BadgeArgs),
     /// Generate a Markdown or HTML security report
     Report(commands::report::ReportArgs),
+    /// Detect potential storage key collisions in Soroban contracts
+    Storage(commands::storage::StorageArgs),
     /// Initialize Sanctifier in a new project
     Init(commands::init::InitArgs),
     /// Show per-contract complexity metrics (cyclomatic complexity, nesting, LOC)
@@ -56,6 +58,9 @@ fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let log_output = match &cli.command {
         Commands::Analyze(args) if args.format == "json" => logging::LogOutput::Json,
+        Commands::Storage(args) if args.format == commands::storage::OutputFormat::Json => {
+            logging::LogOutput::Json
+        }
         _ => logging::LogOutput::Text,
     };
     logging::init(log_output)?;
@@ -70,6 +75,9 @@ fn run() -> anyhow::Result<()> {
         }
         Commands::Report(args) => {
             commands::report::exec(args)?;
+        }
+        Commands::Storage(args) => {
+            commands::storage::exec(args)?;
         }
         Commands::Init(args) => {
             let path = Some(args.path.clone());
