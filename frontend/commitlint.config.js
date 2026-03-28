@@ -17,5 +17,6 @@ module.exports = {
         "chore",
       ],
     ],
+    "body-max-line-length": [0, "always", Infinity],
   },
 };
