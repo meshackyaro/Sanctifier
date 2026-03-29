@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use crate::{Token, TokenClient};
 use bolero::{check, generator::*};
 use soroban_sdk::{testutils::Address as _, Address, Env, String};

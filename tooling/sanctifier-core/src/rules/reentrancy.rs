@@ -49,7 +49,6 @@ struct FnReentrancyState {
 struct ReentrancyViolation {
     fn_name: String,
     line: usize,
-    col: usize,
 }
 
 // ── Rule implementation ───────────────────────────────────────────────────────
@@ -216,15 +215,15 @@ fn scan_expr(expr: &syn::Expr, fn_name: &str, state: &mut FnReentrancyState) {
             }
 
             // Detect invoke_contract / invoke_contract_check
-            if method == "invoke_contract" || method == "invoke_contract_check" {
-                if state.has_prior_mutation && !state.has_guard {
-                    let span = mc.span();
-                    state.violations.push(ReentrancyViolation {
-                        fn_name: fn_name.to_string(),
-                        line: span.start().line,
-                        col: span.start().column,
-                    });
-                }
+            if (method == "invoke_contract" || method == "invoke_contract_check")
+                && state.has_prior_mutation
+                && !state.has_guard
+            {
+                let span = mc.span();
+                state.violations.push(ReentrancyViolation {
+                    fn_name: fn_name.to_string(),
+                    line: span.start().line,
+                });
             }
 
             // Recurse
@@ -237,15 +236,15 @@ fn scan_expr(expr: &syn::Expr, fn_name: &str, state: &mut FnReentrancyState) {
             if let syn::Expr::Path(p) = &*c.func {
                 if let Some(seg) = p.path.segments.last() {
                     let ident = seg.ident.to_string();
-                    if ident == "invoke_contract" || ident == "invoke_contract_check" {
-                        if state.has_prior_mutation && !state.has_guard {
-                            let span = c.span();
-                            state.violations.push(ReentrancyViolation {
-                                fn_name: fn_name.to_string(),
-                                line: span.start().line,
-                                col: span.start().column,
-                            });
-                        }
+                    if (ident == "invoke_contract" || ident == "invoke_contract_check")
+                        && state.has_prior_mutation
+                        && !state.has_guard
+                    {
+                        let span = c.span();
+                        state.violations.push(ReentrancyViolation {
+                            fn_name: fn_name.to_string(),
+                            line: span.start().line,
+                        });
                     }
                 }
             }

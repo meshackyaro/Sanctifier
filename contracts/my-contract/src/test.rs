@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use crate::{Token, TokenClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},

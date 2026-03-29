@@ -1,5 +1,3 @@
-
-
 use crate::{GovernorContract, GovernorContractClient, ProposalState};
 use soroban_sdk::{
     symbol_short,

@@ -1,5 +1,3 @@
-
-
 use crate::{VestingContract, VestingContractClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
@@ -16,7 +14,9 @@ fn test_vesting_cliff() {
     let token_admin = Address::generate(&env);
 
     // Register a mock token
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
+    let token_id = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
     let token = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
     token.mint(&admin, &1000);
 
@@ -59,7 +59,9 @@ fn test_vesting_linear_and_claim() {
     let beneficiary = Address::generate(&env);
     let token_admin = Address::generate(&env);
 
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
+    let token_id = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
     let token = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
     let token_query = soroban_sdk::token::TokenClient::new(&env, &token_id);
     token.mint(&admin, &1000);
@@ -105,7 +107,9 @@ fn test_vesting_revoke() {
     let beneficiary = Address::generate(&env);
     let token_admin = Address::generate(&env);
 
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
+    let token_id = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
     let token = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
     let token_query = soroban_sdk::token::TokenClient::new(&env, &token_id);
     token.mint(&admin, &1000);
@@ -142,7 +146,9 @@ fn test_claim_nothing_fails() {
     let admin = Address::generate(&env);
     let beneficiary = Address::generate(&env);
     let token_admin = Address::generate(&env);
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
+    let token_id = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
     let token = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
     token.mint(&admin, &1000);
 
