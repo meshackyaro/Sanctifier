@@ -38,7 +38,9 @@ impl BridgeContract {
             env.panic_with_error(Error::InvalidThreshold);
         }
         env.storage().instance().set(&DataKey::Signers, &signers);
-        env.storage().instance().set(&DataKey::Threshold, &threshold);
+        env.storage()
+            .instance()
+            .set(&DataKey::Threshold, &threshold);
     }
 
     /// Execute a cross-chain transfer after validating signatures from enough signers.
@@ -51,14 +53,20 @@ impl BridgeContract {
         amount: u128,
         signers_providing_auth: Vec<Address>,
     ) {
-        let transfer_hash = Self::calculate_transfer_hash(&env, &source_chain, &source_txn, &target_addr, amount);
+        let transfer_hash =
+            Self::calculate_transfer_hash(&env, &source_chain, &source_txn, &target_addr, amount);
 
-        if env.storage().persistent().has(&DataKey::Transfer(transfer_hash.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Transfer(transfer_hash.clone()))
+        {
             // Already processed to prevent double-spending/relay attacks
             return;
         }
 
-        let authorized_signers: Vec<Address> = env.storage().instance().get(&DataKey::Signers).unwrap();
+        let authorized_signers: Vec<Address> =
+            env.storage().instance().get(&DataKey::Signers).unwrap();
         let threshold: u32 = env.storage().instance().get(&DataKey::Threshold).unwrap();
 
         let mut valid_signers_count = 0;
@@ -81,14 +89,16 @@ impl BridgeContract {
         }
 
         // Mark as processed
-        env.storage().persistent().set(&DataKey::Transfer(transfer_hash.clone()), &true);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Transfer(transfer_hash.clone()), &true);
 
         // Emit bridge event
         env.events().publish(
             (symbol_short!("bridged"), source_chain, source_txn),
             (target_addr, amount),
         );
-        
+
         // In a real implementation, this would trigger the minting or release of tokens.
     }
 

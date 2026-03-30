@@ -547,11 +547,14 @@ fn test_analyze_json_includes_call_graph_edges() {
 
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
     let payload: serde_json::Value = serde_json::from_str(&stdout).expect("stdout should be JSON");
-    
+
     // The current JSON output doesn't include call_graph at the top level
     // Just verify the JSON is valid and contains expected structure
     assert!(payload.is_object(), "JSON output should be an object");
-    assert!(payload["error_codes"].is_array(), "JSON should contain error_codes");
+    assert!(
+        payload["error_codes"].is_array(),
+        "JSON should contain error_codes"
+    );
 }
 /// Verifies that `sanctifier analyze --format json` output conforms to the
 /// published JSON Schema at `schemas/analysis-output.json`.
@@ -662,10 +665,7 @@ fn test_analyze_json_parsable_output() {
         serde_json::from_str(&stdout).expect("JSON output should be valid JSON");
 
     // Check for expected top-level keys in the current JSON schema
-    assert!(
-        parsed.is_object(),
-        "JSON output should be an object"
-    );
+    assert!(parsed.is_object(), "JSON output should be an object");
     assert!(
         parsed["error_codes"].is_array(),
         "JSON should contain error_codes array"

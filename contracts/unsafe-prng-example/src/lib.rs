@@ -13,12 +13,12 @@ impl UnsafePrngExample {
     pub fn draw_winner_unsafe(env: Env, participants: Vec<Address>) -> Address {
         let random_index: u64 = env.prng().gen_range(0..participants.len() as u64);
         let winner = participants.get(random_index as u32).unwrap();
-        
+
         // Store winner in contract state - this makes it state-critical
         env.storage()
             .persistent()
             .set(&symbol_short!("winner"), &winner);
-        
+
         winner
     }
 
@@ -32,27 +32,19 @@ impl UnsafePrngExample {
     /// This function will be flagged by the unsafe_prng rule.
     pub fn distribute_rewards_unsafe(env: Env, recipients: Vec<Address>, amount: i128) {
         let random_bonus: u64 = env.prng().gen_range(1..10);
-        
+
         for recipient in recipients.iter() {
-            let final_amount = if random_bonus > 5 {
-                amount * 2
-            } else {
-                amount
-            };
-            
+            let final_amount = if random_bonus > 5 { amount * 2 } else { amount };
+
             // State mutation based on random value
-            env.storage()
-                .persistent()
-                .set(&recipient, &final_amount);
+            env.storage().persistent().set(&recipient, &final_amount);
         }
     }
 
     /// SAFE: Non-critical storage operation (no PRNG involved).
     /// This function will NOT be flagged.
     pub fn set_value(env: Env, key: u32, value: u64) {
-        env.storage()
-            .persistent()
-            .set(&key, &value);
+        env.storage().persistent().set(&key, &value);
     }
 }
 
@@ -88,4 +80,3 @@ mod test {
         assert!(random < 100);
     }
 }
-

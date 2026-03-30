@@ -19,10 +19,10 @@ pub mod shadow_storage;
 pub mod truncation_bounds;
 /// Unhandled `Result` values.
 pub mod unhandled_result;
-/// Unused local variables.
-pub mod unused_variable;
 /// Unsafe PRNG usage in state-critical code.
 pub mod unsafe_prng;
+/// Unused local variables.
+pub mod unused_variable;
 use serde::Serialize;
 use std::any::Any;
 

@@ -343,7 +343,10 @@ mod tests {
             }
         "#;
         let violations = rule.check(source);
-        assert!(!violations.is_empty(), "PRNG without reseed should be flagged");
+        assert!(
+            !violations.is_empty(),
+            "PRNG without reseed should be flagged"
+        );
         assert!(violations[0].message.contains("draw_winner"));
         assert!(violations[0].message.contains("without explicit reseeding"));
     }

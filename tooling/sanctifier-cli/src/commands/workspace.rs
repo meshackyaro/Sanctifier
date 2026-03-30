@@ -1,14 +1,11 @@
 #![allow(dead_code)]
-use crate::commands::analyze::{
-    analyze_single_file, collect_rs_files, run_with_timeout,
-};
+use crate::commands::analyze::{analyze_single_file, collect_rs_files, run_with_timeout};
 use crate::vulndb::VulnDatabase;
 use clap::Args;
 use colored::*;
 use rayon::prelude::*;
 use sanctifier_core::{Analyzer, SanctifyConfig};
 use serde::Deserialize;
-use toml;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -16,6 +13,7 @@ use std::sync::{
     Arc,
 };
 use std::time::Duration;
+use toml;
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
@@ -86,7 +84,10 @@ fn classify_member(member_dir: &Path) -> WorkspaceMember {
         .to_string();
 
     let cargo_path = member_dir.join("Cargo.toml");
-    let kind = match fs::read_to_string(&cargo_path).ok().and_then(|s| toml::from_str::<CargoManifest>(&s).ok()) {
+    let kind = match fs::read_to_string(&cargo_path)
+        .ok()
+        .and_then(|s| toml::from_str::<CargoManifest>(&s).ok())
+    {
         Some(manifest) => {
             let is_cdylib = manifest
                 .lib
@@ -102,7 +103,11 @@ fn classify_member(member_dir: &Path) -> WorkspaceMember {
         None => MemberKind::Unknown,
     };
 
-    WorkspaceMember { path: member_dir.to_path_buf(), name, kind }
+    WorkspaceMember {
+        path: member_dir.to_path_buf(),
+        name,
+        kind,
+    }
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -142,10 +147,14 @@ pub fn exec(args: WorkspaceArgs) -> anyhow::Result<()> {
         .map(|m| classify_member(&workspace_root.join(m)))
         .collect();
 
-    let contracts: Vec<&WorkspaceMember> =
-        members.iter().filter(|m| m.kind == MemberKind::Contract).collect();
-    let shared_libs: Vec<&WorkspaceMember> =
-        members.iter().filter(|m| m.kind != MemberKind::Contract).collect();
+    let contracts: Vec<&WorkspaceMember> = members
+        .iter()
+        .filter(|m| m.kind == MemberKind::Contract)
+        .collect();
+    let shared_libs: Vec<&WorkspaceMember> = members
+        .iter()
+        .filter(|m| m.kind != MemberKind::Contract)
+        .collect();
 
     if !is_json {
         println!(
@@ -202,12 +211,7 @@ pub fn exec(args: WorkspaceArgs) -> anyhow::Result<()> {
             .map(|file_path| {
                 let idx = counter.fetch_add(1, Ordering::Relaxed) + 1;
                 if !is_json {
-                    eprintln!(
-                        "  [{}/{}] {}",
-                        idx,
-                        total_files,
-                        file_path.display()
-                    );
+                    eprintln!("  [{}/{}] {}", idx, total_files, file_path.display());
                 }
                 let content = match fs::read_to_string(file_path) {
                     Ok(c) => c,
@@ -219,7 +223,8 @@ pub fn exec(args: WorkspaceArgs) -> anyhow::Result<()> {
                 let file_name_clone = file_name.clone();
                 run_with_timeout(timeout_dur, move || {
                     analyze_single_file(&analyzer, &vuln_db, &content, &file_name_clone)
-                }).unwrap_or_default()
+                })
+                .unwrap_or_default()
             })
             .collect();
 
@@ -228,7 +233,11 @@ pub fn exec(args: WorkspaceArgs) -> anyhow::Result<()> {
         all_findings.push((contract.name.clone(), finding_count));
 
         if !is_json {
-            let icon = if finding_count == 0 { "✅".green() } else { "⚠️".yellow() };
+            let icon = if finding_count == 0 {
+                "✅".green()
+            } else {
+                "⚠️".yellow()
+            };
             println!(
                 "{} {} — {} finding(s)",
                 icon,
@@ -243,11 +252,21 @@ pub fn exec(args: WorkspaceArgs) -> anyhow::Result<()> {
             let unhandled: usize = results.iter().map(|r| r.unhandled_results.len()).sum();
             let collisions: usize = results.iter().map(|r| r.collisions.len()).sum();
 
-            if auth > 0 { println!("      auth gaps:        {}", auth); }
-            if arith > 0 { println!("      arithmetic:       {}", arith); }
-            if panics > 0 { println!("      panic/unwrap:     {}", panics); }
-            if unhandled > 0 { println!("      unhandled result: {}", unhandled); }
-            if collisions > 0 { println!("      key collisions:   {}", collisions); }
+            if auth > 0 {
+                println!("      auth gaps:        {}", auth);
+            }
+            if arith > 0 {
+                println!("      arithmetic:       {}", arith);
+            }
+            if panics > 0 {
+                println!("      panic/unwrap:     {}", panics);
+            }
+            if unhandled > 0 {
+                println!("      unhandled result: {}", unhandled);
+            }
+            if collisions > 0 {
+                println!("      key collisions:   {}", collisions);
+            }
         }
     }
 
@@ -262,7 +281,12 @@ pub fn exec(args: WorkspaceArgs) -> anyhow::Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        println!("\n{} Grand total: {} finding(s) across {} contract(s)", "📊".cyan(), grand_total, contracts.len());
+        println!(
+            "\n{} Grand total: {} finding(s) across {} contract(s)",
+            "📊".cyan(),
+            grand_total,
+            contracts.len()
+        );
     }
 
     Ok(())
@@ -278,7 +302,10 @@ fn count_findings(r: &crate::commands::analyze::FileAnalysisResult) -> usize {
         + r.custom_matches.len()
         + r.event_issues.len()
         + r.unhandled_results.len()
-        + r.upgrade_reports.iter().map(|u| u.findings.len()).sum::<usize>()
+        + r.upgrade_reports
+            .iter()
+            .map(|u| u.findings.len())
+            .sum::<usize>()
         + r.smt_issues.len()
         + r.sep41_issues.len()
         + r.truncation_bounds_issues.len()
