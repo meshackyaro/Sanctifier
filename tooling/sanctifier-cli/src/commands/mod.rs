@@ -16,3 +16,4 @@ pub mod verify;
 pub mod watch;
 pub mod webhook;
 pub mod workspace;
+pub mod pr_comment;
