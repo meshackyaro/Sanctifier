@@ -50,6 +50,8 @@ pub mod taint_propagation;
 pub mod static_reentrancy;
 /// Soroban SDK v22 deprecated storage/deployment API patterns.
 pub mod deprecated_sdk_usage;
+/// Detect env.ledger().timestamp() used as entropy for randomness.
+pub mod timestamp_randomness;
 use serde::Serialize;
 use std::any::Any;
 
@@ -218,6 +220,7 @@ impl RuleRegistry {
         registry.register(taint_propagation::TaintPropagationRule::new());
         registry.register(static_reentrancy::StaticReentrancyRule::new());
         registry.register(deprecated_sdk_usage::DeprecatedSdkUsageRule::new());
+        registry.register(timestamp_randomness::TimestampRandomnessRule::new());
         registry
     }
 }

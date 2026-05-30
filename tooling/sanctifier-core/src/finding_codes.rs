@@ -79,6 +79,8 @@ pub const TAINT_PROPAGATION: &str = "S026";
 pub const STATIC_REENTRANCY: &str = "S027";
 /// Usage of storage/deployment APIs that were removed or renamed in Soroban SDK v22.
 pub const DEPRECATED_SDK_USAGE: &str = "S028";
+/// Use of env.ledger().timestamp() as entropy for randomness.
+pub const TIMESTAMP_RANDOMNESS: &str = "S029";
 
 /// A single finding-code entry with machine-readable code, category, and
 /// human-readable description.
@@ -365,6 +367,15 @@ pub fn all_finding_codes() -> Vec<FindingCode> {
             remediation: "Migrate bump() to extend_ttl(), replace RawVal with Val, and use new deploy patterns from the Environment",
             doc_url: "https://github.com/HyperSafeD/Sanctifier/blob/main/docs/error-codes.md",
         },
+        FindingCode {
+            code: TIMESTAMP_RANDOMNESS,
+            category: "randomness",
+            description: "Block timestamp (env.ledger().timestamp()) used as entropy for randomness — validators can manipulate timestamps within bounds",
+            title: "Timestamp Used as Randomness",
+            severity: FindingSeverity::High,
+            remediation: "Never use env.ledger().timestamp() as a sole source of randomness. Use a VRF oracle or combine multiple unpredictable entropy sources",
+            doc_url: "https://github.com/HyperSafeD/Sanctifier/blob/main/docs/rules/unsafe-prng.md",
+        },
     ]
 }
 
@@ -406,5 +417,6 @@ mod tests {
         assert!(codes.iter().any(|c| c.code == TAINT_PROPAGATION));
         assert!(codes.iter().any(|c| c.code == STATIC_REENTRANCY));
         assert!(codes.iter().any(|c| c.code == DEPRECATED_SDK_USAGE));
+        assert!(codes.iter().any(|c| c.code == TIMESTAMP_RANDOMNESS));
     }
 }
