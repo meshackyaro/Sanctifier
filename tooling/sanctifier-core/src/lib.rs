@@ -1,5 +1,6 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "soroban")]
 use soroban_sdk::Env;
 use std::collections::HashSet;
 use std::panic::{self, AssertUnwindSafe};
@@ -304,6 +305,7 @@ pub enum Error {
 }
 
 /// Trait for runtime monitoring. Implement this to enforce invariants on your contract state.
+#[cfg(feature = "soroban")]
 pub trait SanctifiedGuard {
     fn check_invariant(&self, env: &Env) -> Result<(), Error>;
 }

@@ -6,8 +6,8 @@
 //! audit the mapping between internal codes and output messages in one place.
 
 use sanctifier_core::{
-    finding_codes, ArithmeticIssue, EventIssue, PanicIssue, SizeWarning,
-    StorageCollisionIssue, UnhandledResultIssue, UnsafePattern,
+    finding_codes, ArithmeticIssue, EventIssue, PanicIssue, SizeWarning, StorageCollisionIssue,
+    UnhandledResultIssue, UnsafePattern,
 };
 
 use crate::types::Finding;
