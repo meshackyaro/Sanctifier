@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
-use syn::{Expr, ExprCall, ExprMacro, ItemConst, Lit};
+use syn::{Expr, ExprCall, ExprMacro, ExprMethodCall, ItemConst, Lit};
 
 #[derive(Debug, Serialize, Clone)]
 pub struct StorageCollisionIssue {
@@ -53,15 +53,23 @@ impl StorageVisitor {
         }
     }
 
-
-
-    fn add_key(&mut self, value: String, key_type: String, storage_type: SorobanStorageType, location: String, line: usize) {
+    fn add_key(
+        &mut self,
+        value: String,
+        key_type: String,
+        storage_type: SorobanStorageType,
+        location: String,
+        line: usize,
+    ) {
         let info = KeyInfo {
             key_type,
             location,
             line,
         };
-        self.keys.entry((storage_type, value)).or_default().push(info);
+        self.keys
+            .entry((storage_type, value))
+            .or_default()
+            .push(info);
     }
 
     pub fn final_check(&mut self) {
@@ -173,6 +181,25 @@ impl<'ast> Visit<'ast> for StorageVisitor {
             }
         }
         syn::visit::visit_expr_call(self, i);
+    }
+
+    fn visit_expr_method_call(&mut self, i: &'ast ExprMethodCall) {
+        // Detect env.storage().<type>().set(key, value)
+        if i.method == "set" && i.args.len() >= 2 {
+            let storage_type = Self::parse_storage_type_from_expr(&i.receiver);
+            if storage_type != SorobanStorageType::Unknown {
+                if let Some(key) = Self::extract_key_value_expr(&i.args[0]) {
+                    self.add_key(
+                        key,
+                        "storage::set".to_string(),
+                        storage_type,
+                        "inline".to_string(),
+                        i.span().start().line,
+                    );
+                }
+            }
+        }
+        syn::visit::visit_expr_method_call(self, i);
     }
 
     fn visit_expr_macro(&mut self, i: &'ast ExprMacro) {

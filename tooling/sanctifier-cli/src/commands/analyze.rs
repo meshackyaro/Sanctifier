@@ -1,9 +1,9 @@
+use crate::commands::color as c;
 use crate::telemetry::{self, AnalysisTelemetry};
 use crate::vulndb::{VulnDatabase, VulnMatch};
 use clap::Args;
 use colored::*;
 #[allow(unused_imports)]
-
 use rayon::prelude::*;
 use sanctifier_core::finding_codes;
 use sanctifier_core::rules::RuleRegistry;
@@ -120,7 +120,7 @@ pub(crate) struct FileAnalysisResult {
     pub(crate) event_issues: Vec<sanctifier_core::EventIssue>,
     pub(crate) unhandled_results: Vec<sanctifier_core::UnhandledResultIssue>,
     pub(crate) upgrade_reports: Vec<sanctifier_core::UpgradeReport>,
-    pub(crate) smt_issues: Vec<serde_json::Value>,
+    pub(crate) smt_issues: Vec<sanctifier_core::SmtInvariantIssue>,
     pub(crate) truncation_bounds_issues: Vec<sanctifier_core::TruncationBoundsIssue>,
     pub(crate) sep41_checked_contracts: Vec<String>,
     pub(crate) sep41_issues: Vec<sanctifier_core::Sep41Issue>,
@@ -143,63 +143,12 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
 pub(crate) fn run_analysis(args: AnalyzeArgs) -> anyhow::Result<bool> {
     if args.format == "ndjson" {
         return stream_ndjson(&args);
-
-
-    let config = SanctifyConfig::default();
-    let analyzer = Analyzer::new(config);
-
-    let mut collisions = Vec::new();
-
-    if path.is_dir() {
-        walk_dir(path, &analyzer, &mut collisions)?;
-    } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-        if let Ok(content) = fs::read_to_string(path) {
-            collisions.extend(analyzer.scan_storage_collisions(&content));
-        }
-        for vuln in &vuln_matches {
-            if let Ok(sev) = vuln.severity.parse::<SeverityLevel>() {
-                consider(sev);
-            }
-        }
-        if !timed_out_files.is_empty() {
-            consider(SeverityLevel::Low);
-        }
-        if !contractimport_issues.is_empty() {
-            consider(SeverityLevel::Medium);
-        }
-        highest
-    };
-
-    // Profile overrides --exit-code / --min-severity when set
-    let should_exit_with_1 = match args.profile {
-        Some(AnalysisProfile::Strict)  => total_findings > 0,
-        Some(AnalysisProfile::Lenient) => false,
-        Some(AnalysisProfile::Audit)   => false,
-        Some(AnalysisProfile::Ci)      => has_critical || has_high,
-        None => args.exit_code && highest_finding_severity
-            .map(|h| h >= args.min_severity)
-            .unwrap_or(false),
-    };
-
-    let timestamp = chrono_timestamp();
-    let _duration_ms = start.elapsed().as_millis() as u64;
-    let duration_ms = _duration_ms;
-
-    let webhook_payload = ScanWebhookPayload {
-        event: "scan.completed",
-        project_path: path.display().to_string(),
-        timestamp_unix: timestamp.clone(),
-        summary: ScanWebhookSummary {
-            total_findings,
-            has_critical,
-            has_high,
-        },
-    };
-    if let Err(err) = send_scan_completed_webhooks(&args.webhook_urls, &webhook_payload) {
-        warn!(target: "sanctifier", error = %err, "Failed to initialize webhook client");
     }
 
     let path = &args.path;
+    if !path.exists() {
+        anyhow::bail!("path does not exist: {}", path.display());
+    }
     if !is_soroban_project(path) {
         eprintln!("No Soroban project found at {:?}", path);
         return Ok(false);
@@ -208,32 +157,34 @@ pub(crate) fn run_analysis(args: AnalyzeArgs) -> anyhow::Result<bool> {
     let start = Instant::now();
     let config = load_config(path);
     let telemetry_enabled = config.telemetry;
-    let scan_root = if path.is_file() {
-        path.parent().unwrap_or(path).to_path_buf()
+
+    // When a single file is given, scan only that file — not its parent directory.
+    let rs_files: Vec<PathBuf> = if path.is_file() {
+        vec![path.clone()]
     } else {
-        path.clone()
+        collect_rs_files(path, &config.ignore_paths)
     };
-    let rs_files = collect_rs_files(&scan_root, &config.ignore_paths);
+
     let registry = RuleRegistry::with_default_rules();
+    let analyzer = Analyzer::new(config.clone());
 
     let mut all_violations: Vec<(String, sanctifier_core::RuleViolation)> = Vec::new();
+    let mut size_warnings_total: usize = 0;
+    let mut collision_total: usize = 0;
+
     for file_path in &rs_files {
         let content = match fs::read_to_string(file_path) {
             Ok(c) => c,
             Err(_) => continue,
         };
         let file_str = file_path.display().to_string();
+        eprintln!("Analyzing {}", file_str);
+        tracing::debug!(target: "sanctifier", "Scanning Rust source file: {}", file_str);
         for v in registry.run_all(&content) {
             all_violations.push((file_str.clone(), v));
         }
-    // ── Text output ──────────────────────────────────────────────────────────
-    if let Some(profile) = args.profile {
-        println!(
-            "{} Profile: {} — {}",
-            c::blue("ℹ"),
-            c::bold(profile.as_str()),
-            profile.description()
-        );
+        size_warnings_total += analyzer.analyze_ledger_size(&content).len();
+        collision_total += analyzer.scan_storage_collisions(&content).len();
     }
 
     let total = all_violations.len();
@@ -255,13 +206,39 @@ pub(crate) fn run_analysis(args: AnalyzeArgs) -> anyhow::Result<bool> {
         }
     }
 
+    // Notify webhooks (non-fatal)
+    if !args.webhook_urls.is_empty() {
+        use crate::commands::webhook::{
+            send_scan_completed_webhooks, ScanWebhookPayload, ScanWebhookSummary,
+        };
+        let payload = ScanWebhookPayload {
+            event: "scan_completed",
+            project_path: path.display().to_string(),
+            timestamp_unix: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .to_string(),
+            summary: ScanWebhookSummary {
+                total_findings: total,
+                has_critical: all_violations
+                    .iter()
+                    .any(|(_, v)| matches!(v.severity, sanctifier_core::Severity::Error)),
+                has_high: all_violations
+                    .iter()
+                    .any(|(_, v)| matches!(v.severity, sanctifier_core::Severity::Warning)),
+            },
+        };
+        let _ = send_scan_completed_webhooks(&args.webhook_urls, &payload);
+    }
+
     if args.format == "json" {
-        let findings: Vec<serde_json::Value> = all_violations
+        let rule_violations: Vec<serde_json::Value> = all_violations
             .into_iter()
             .map(|(file, v)| {
                 serde_json::json!({
                     "file": file,
-                    "rule": v.rule_name,
+                    "rule_name": v.rule_name,
                     "severity": format!("{:?}", v.severity),
                     "message": v.message,
                     "location": v.location,
@@ -273,7 +250,7 @@ pub(crate) fn run_analysis(args: AnalyzeArgs) -> anyhow::Result<bool> {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "schema_version": "1.0.0",
-                "findings": findings,
+                "rule_violations": rule_violations,
                 "error_codes": finding_codes::all_finding_codes(),
                 "summary": {
                     "total_findings": total,
@@ -282,26 +259,34 @@ pub(crate) fn run_analysis(args: AnalyzeArgs) -> anyhow::Result<bool> {
                 },
             }))?
         );
-            "\n{} {} file(s) timed out ({}s limit):",
-            c::yellow("⏱️"),
-            timed_out_files.len(),
-            timeout_secs
-        );
-        for f in &timed_out_files {
+    } else {
+        if let Some(profile) = args.profile {
             println!(
-                "   {} [{}] {}",
-                c::red("->"),
-                c::bold(finding_codes::ANALYSIS_TIMEOUT),
-                f
+                "{} Profile: {} — {}",
+                c::blue("ℹ"),
+                c::bold(profile.as_str()),
+                profile.description()
             );
         }
-    }
-    if collisions.is_empty() {
-        println!("\n{} No storage key collisions found.", c::green("✅"));
-    } else {
-        if all_violations.is_empty() {
-            println!("\n{} No issues found.", "✅".green());
-        } else {
+        let has_auth = all_violations
+            .iter()
+            .any(|(_, v)| v.rule_name.contains("auth"));
+        let has_panic = all_violations
+            .iter()
+            .any(|(_, v)| v.rule_name.contains("panic"));
+        let has_arith = all_violations
+            .iter()
+            .any(|(_, v)| v.rule_name.contains("arithmetic") || v.rule_name.contains("overflow"));
+        if has_auth {
+            println!("Found potential Authentication Gaps!");
+        }
+        if has_panic {
+            println!("Found explicit Panics/Unwraps!");
+        }
+        if has_arith {
+            println!("Found unchecked Arithmetic Operations!");
+        }
+        if !all_violations.is_empty() {
             println!("\n{} Found {} issue(s):", "⚠️".yellow(), total);
             for (file, v) in &all_violations {
                 println!(
@@ -316,11 +301,13 @@ pub(crate) fn run_analysis(args: AnalyzeArgs) -> anyhow::Result<bool> {
                 }
             }
         }
-        println!(
-            "\n{} Analysis complete ({} ms).",
-            "✨".green(),
-            duration_ms
-        );
+        if size_warnings_total == 0 {
+            println!("No ledger size issues found.");
+        }
+        if collision_total == 0 {
+            println!("No storage key collisions found.");
+        }
+        println!("\nStatic analysis complete.");
     }
 
     Ok(total > 0)
@@ -399,6 +386,7 @@ fn stream_ndjson(args: &AnalyzeArgs) -> anyhow::Result<bool> {
     Ok(total > 0)
 }
 
+#[allow(dead_code)]
 fn walk_dir(
     dir: &Path,
     analyzer: &Analyzer,
@@ -421,167 +409,6 @@ fn walk_dir(
         }
     }
     Ok(())
-            "\n{} Found potential Storage Key Collisions!",
-            c::yellow("⚠️")
-        );
-
-                }
-                println!("      Location: {}", finding.location);
-                println!("      Message: {}", finding.message);
-                println!("      Suggestion: {}", finding.suggestion);
-            }
-        }
-    }
-    if !smt_issues.is_empty() {
-        println!("\n{} Found Formal Verification (SMT) issues!", c::red("❌"));
-        for issue in &smt_issues {
-            println!(
-                "   {} [{}] Function: {}",
-                c::red("->"),
-                c::bold(finding_codes::SMT_INVARIANT_VIOLATION),
-                c::bold(&issue.function_name)
-            );
-            println!("      Description: {}", issue.description);
-            println!("      Location: {}", issue.location);
-        }
-    }
-    if !sep41_checked_contracts.is_empty() && sep41_issues.is_empty() {
-        println!("{} SEP-41 token interface verified exactly.", c::green("✅"));
-    } else if !sep41_issues.is_empty() {
-        println!("\n{} Found SEP-41 Interface Deviations!", c::yellow("⚠️"));
-        for issue in &sep41_issues {
-            println!(
-                "   {} [{}] Function: {}",
-                c::red("->"),
-                c::bold(finding_codes::SEP41_INTERFACE_DEVIATION),
-                c::bold(&issue.function_name)
-            );
-            println!("      Kind: {:?}", issue.kind);
-            println!("      Location: {}", issue.location);
-            println!("      Message: {}", issue.message);
-            println!("      Expected: {}", issue.expected_signature);
-            if let Some(actual) = &issue.actual_signature {
-                println!("      Actual: {}", actual);
-            }
-        }
-    }
-    if !contractimport_issues.is_empty() {
-        println!("\n{} Found ContractImport Mismatches!", c::yellow("⚠️"));
-        for issue in &contractimport_issues {
-            println!(
-                "   {} [{}] WASM: {}",
-                c::red("->"),
-                c::bold(finding_codes::CONTRACTIMPORT_MISMATCH),
-                c::bold(&issue.wasm_path)
-            );
-            println!("      Location: {}", issue.location);
-            println!("      Message: {}", issue.message);
-        }
-    }
-    if vuln_matches.is_empty() {
-        println!(
-            "{} No known vulnerability patterns matched (DB v{}).",
-            c::green("✅"),
-            vuln_db.version
-        );
-    } else {
-        println!(
-            "\n{} Found {} known vulnerability pattern(s) (DB v{})!",
-            c::red("🛡️"),
-            vuln_matches.len(),
-            vuln_db.version
-        );
-        for m in &vuln_matches {
-            let sev_icon = match m.severity.as_str() {
-                "critical" => c::red("❌"),
-                "high" => c::red("🔴"),
-                "medium" => c::yellow("⚠️"),
-                _ => c::blue("ℹ️"),
-            };
-            println!(
-                "   {} [{}] {} ({})",
-                sev_icon,
-                c::bold(&m.vuln_id),
-                c::bold(&m.name),
-                m.severity.to_uppercase()
-            );
-            println!("      File: {}:{}", m.file, m.line);
-            println!("      {}", m.description);
-            if !m.recommendation.is_empty() {
-                println!("      Suggestion: {}", m.recommendation);
-            }
-        }
-    }
-
-    let cached_count = cached_counter.load(Ordering::Relaxed);
-    let reanalysed_count = total_files - cached_count;
-
-    if is_sarif {
-        let mut sarif_results: Vec<serde_json::Value> = Vec::new();
-        for gap in &auth_gaps {
-            sarif_results.push(serde_json::json!({
-                "ruleId": finding_codes::AUTH_GAP,
-                "level": "error",
-                "message": { "text": format!("Missing require_auth() in function {}", gap.function_name) },
-                "locations": [{
-                    "physicalLocation": {
-                        "artifactLocation": { "uri": gap.function_name.split(':').next().unwrap_or("unknown") },
-                        "region": { "startLine": 1 }
-                    }
-                }]
-            }));
-        }
-        for issue in &panic_issues {
-            sarif_results.push(serde_json::json!({
-                "ruleId": finding_codes::PANIC_USAGE,
-                "level": "warning",
-                "message": { "text": format!("{} at {}", issue.issue_type, issue.location) },
-                "locations": [{
-                    "physicalLocation": {
-                        "artifactLocation": { "uri": issue.location.split(':').next().unwrap_or("unknown") },
-                        "region": { "startLine": 1 }
-                    }
-                }]
-            }));
-        }
-        for issue in &arithmetic_issues {
-            sarif_results.push(serde_json::json!({
-                "ruleId": finding_codes::ARITHMETIC_OVERFLOW,
-                "level": "warning",
-                "message": { "text": format!("Unchecked {} at {}", issue.operation, issue.location) },
-                "locations": [{
-                    "physicalLocation": {
-                        "artifactLocation": { "uri": issue.location.split(':').next().unwrap_or("unknown") },
-                        "region": { "startLine": 1 }
-                    }
-                }]
-            }));
-        }
-
-        let sarif_log = crate::commands::sarif::build_sarif_log(
-            "Sanctifier",
-            env!("CARGO_PKG_VERSION"),
-            sarif_results,
-        );
-
-        if let Err(e) = crate::commands::sarif::validate_sarif(&sarif_log) {
-            eprintln!("{}", c::red("SARIF validation failed:"));
-            eprintln!("{}", e);
-            std::process::exit(1);
-        }
-
-        println!("{}", serde_json::to_string_pretty(&sarif_log)?);
-        return Ok(should_exit_with_1);
-    }
-
-    println!(
-        "\n{} Static analysis complete. ({} served from cache, {} re-analysed, {} ms)",
-        c::green("✨"),
-        c::bold(&cached_count.to_string()),
-        c::bold(&reanalysed_count.to_string()),
-        duration_ms
-    );
-    Ok(should_exit_with_1)
 }
 
 // ── Analyse one file ─────────────────────────────────────────────────────────
@@ -737,6 +564,7 @@ fn collect_rs_files_inner(dir: &Path, ignore_paths: &[String], out: &mut Vec<Pat
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 fn chrono_timestamp() -> String {
     let now = std::time::SystemTime::now();
     let secs = now
@@ -784,6 +612,7 @@ pub(crate) fn is_soroban_project(path: &Path) -> bool {
 
 // ── Cache ────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 fn sha256_hex(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());

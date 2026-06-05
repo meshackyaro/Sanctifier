@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use colored::Colorize;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -13,9 +14,8 @@ static NO_COLOR: AtomicBool = AtomicBool::new(false);
 pub fn init(cli_no_color: bool) {
     let no_color = cli_no_color
         || std::env::var("NO_COLOR").is_ok_and(|v| !v.is_empty())
-        || std::env::var("CLICOLOR_FORCE").is_err_and(|_| {
-            std::env::var("CLICOLOR").is_ok_and(|v| v == "0")
-        });
+        || std::env::var("CLICOLOR_FORCE")
+            .is_err_and(|_| std::env::var("CLICOLOR").is_ok_and(|v| v == "0"));
 
     set_no_color(no_color);
 }
@@ -37,22 +37,38 @@ pub fn is_no_color() -> bool {
 
 /// Convenience: colour a "✓" / "✅" green when colour is enabled, plain otherwise.
 pub fn green_check() -> &'static str {
-    if is_no_color() { "[OK]" } else { "✅" }
+    if is_no_color() {
+        "[OK]"
+    } else {
+        "✅"
+    }
 }
 
 /// Convenience: colour a "✗" / "❌" red when colour is enabled, plain otherwise.
 pub fn red_cross() -> &'static str {
-    if is_no_color() { "[FAIL]" } else { "❌" }
+    if is_no_color() {
+        "[FAIL]"
+    } else {
+        "❌"
+    }
 }
 
 /// Convenience: colour a "⚠️" yellow when colour is enabled, plain otherwise.
 pub fn yellow_warning() -> &'static str {
-    if is_no_color() { "[WARN]" } else { "⚠️" }
+    if is_no_color() {
+        "[WARN]"
+    } else {
+        "⚠️"
+    }
 }
 
 /// Convenience: colour a "ℹ️" / "🔍" blue when colour is enabled, plain otherwise.
 pub fn blue_info() -> &'static str {
-    if is_no_color() { "[INFO]" } else { "ℹ️" }
+    if is_no_color() {
+        "[INFO]"
+    } else {
+        "ℹ️"
+    }
 }
 
 /// Wrap text in bold when colours are enabled.

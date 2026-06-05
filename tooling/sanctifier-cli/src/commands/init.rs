@@ -335,6 +335,7 @@ mod tests {
         let args = InitArgs {
             path: temp_dir.path().to_path_buf(),
             force: false,
+            telemetry: None,
         };
 
         // Execute init command
@@ -364,6 +365,7 @@ mod tests {
         let args = InitArgs {
             path: temp_dir.path().to_path_buf(),
             force: false,
+            telemetry: None,
         };
 
         // Change to temp directory
@@ -393,6 +395,7 @@ mod tests {
         let args = InitArgs {
             path: temp_dir.path().to_path_buf(),
             force: true,
+            telemetry: None,
         };
 
         // Execute init command

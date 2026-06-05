@@ -59,7 +59,8 @@ impl Rule for RequireAuthForArgsRule {
                             continue;
                         }
 
-                        let body = quote::quote!(#method.block).to_string();
+                        let block = &method.block;
+                        let body = quote::quote!(#block).to_string();
 
                         // Check if function has state mutations or external calls
                         if !has_sensitive_operations(&body) {
@@ -67,8 +68,8 @@ impl Rule for RequireAuthForArgsRule {
                         }
 
                         // Check if it uses require_auth but not require_auth_for_args
-                        let has_require_auth = body.contains("require_auth()") 
-                            || body.contains("require_auth (");
+                        let has_require_auth =
+                            body.contains("require_auth()") || body.contains("require_auth (");
                         let has_require_auth_for_args = body.contains("require_auth_for_args");
 
                         if has_require_auth && !has_require_auth_for_args {
@@ -83,11 +84,9 @@ impl Rule for RequireAuthForArgsRule {
                                     fn_name.clone(),
                                 )
                                 .with_suggestion(
-                                    format!(
-                                        "Replace require_auth() with require_auth_for_args() to bind authorization to the exact call payload. \
-                                         Example: address.require_auth_for_args((arg1, arg2, ...).into_val(&env)); \
-                                         This prevents an attacker from replaying a signature with different argument combinations."
-                                    )
+                                    "Replace require_auth() with require_auth_for_args() to bind authorization to the exact call payload. \
+                                     Example: address.require_auth_for_args((arg1, arg2, ...).into_val(&env)); \
+                                     This prevents an attacker from replaying a signature with different argument combinations.".to_string()
                                 ),
                             );
                         }
@@ -113,7 +112,8 @@ fn count_address_params(sig: &syn::Signature) -> usize {
         .iter()
         .filter(|arg| {
             if let syn::FnArg::Typed(pt) = arg {
-                let ty_str = quote::quote!(#pt.ty).to_string();
+                let ty = &pt.ty;
+                let ty_str = quote::quote!(#ty).to_string();
                 // Match Address type (with or without whitespace)
                 ty_str.contains("Address") && !ty_str.contains("Env")
             } else {
@@ -124,18 +124,25 @@ fn count_address_params(sig: &syn::Signature) -> usize {
 }
 
 fn has_sensitive_operations(body: &str) -> bool {
-    // Check for storage mutations
+    // Check for storage mutations (handle both original and quote!-spaced forms)
     let has_storage_mutation = body.contains(".set(")
+        || body.contains(". set (")
         || body.contains(".update(")
+        || body.contains(". update (")
         || body.contains(".remove(")
+        || body.contains(". remove (")
         || body.contains(".extend_ttl(")
-        || body.contains(".bump(");
+        || body.contains(". extend_ttl (")
+        || body.contains(".bump(")
+        || body.contains(". bump (");
 
     // Check for external contract calls
     let has_external_call = body.contains("invoke_contract")
         || body.contains("try_invoke_contract")
         || body.contains(".call(")
-        || body.contains(".try_call(");
+        || body.contains(". call (")
+        || body.contains(".try_call(")
+        || body.contains(". try_call (");
 
     has_storage_mutation || has_external_call
 }
@@ -255,6 +262,46 @@ mod tests {
         let violations = rule.check(source);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].message.contains("3 Address parameters"));
+    }
+
+    #[test]
+    fn test_multi_function_impl_block() {
+        // Same source used in CLI integration test — all 3 functions in one impl block
+        let source = r#"
+use soroban_sdk::{contract, contractimpl, Env, Address, symbol_short};
+
+#[contract]
+pub struct TestContract;
+
+#[contractimpl]
+impl TestContract {
+    pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
+        caller.require_auth();
+        env.storage().instance().set(&symbol_short!("admin"), &new_admin);
+    }
+
+    pub fn set_admin_safe(env: Env, caller: Address, new_admin: Address) {
+        caller.require_auth_for_args((new_admin.clone(),).into_val(&env));
+        env.storage().instance().set(&symbol_short!("admin"), &new_admin);
+    }
+
+    pub fn set_owner(env: Env, owner: Address) {
+        owner.require_auth();
+        env.storage().instance().set(&symbol_short!("owner"), &owner);
+    }
+}
+"#;
+
+        let rule = RequireAuthForArgsRule::new();
+        let violations = rule.check(source);
+        // Only set_admin should be flagged (2 Address params, require_auth not require_auth_for_args)
+        assert_eq!(
+            violations.len(),
+            1,
+            "Expected exactly 1 violation, got {:?}",
+            violations
+        );
+        assert!(violations[0].message.contains("set_admin"));
     }
 
     #[test]

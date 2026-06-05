@@ -104,13 +104,8 @@ impl Rule for DeprecatedSdkUsageRule {
             .violations
             .into_iter()
             .map(|v| {
-                RuleViolation::new(
-                    self.name(),
-                    Severity::Warning,
-                    v.message,
-                    v.location,
-                )
-                .with_suggestion(v.suggestion)
+                RuleViolation::new(self.name(), Severity::Warning, v.message, v.location)
+                    .with_suggestion(v.suggestion)
             })
             .collect()
     }
@@ -174,8 +169,10 @@ impl<'ast> Visit<'ast> for DeprecatedVisitor {
             // bump() is the old TTL-extension API removed in SDK v22.
             if method == "bump" {
                 let receiver = quote::quote!(#node.receiver).to_string();
-                if receiver.contains("storage") || receiver.contains("persistent")
-                    || receiver.contains("temporary") || receiver.contains("instance")
+                if receiver.contains("storage")
+                    || receiver.contains("persistent")
+                    || receiver.contains("temporary")
+                    || receiver.contains("instance")
                 {
                     let line = node.span().start().line;
                     self.violations.push(PendingViolation {
@@ -221,7 +218,10 @@ impl<'ast> Visit<'ast> for DeprecatedVisitor {
         if self.current_fn.is_some() {
             if let Some(segment) = node.path.segments.last() {
                 if segment.ident == "RawVal" {
-                    let line = node.path.segments.last()
+                    let line = node
+                        .path
+                        .segments
+                        .last()
                         .map(|s| s.ident.span().start().line)
                         .unwrap_or(0);
                     let fn_name = self.current_fn.as_deref().unwrap_or("<unknown>");
@@ -298,7 +298,11 @@ mod tests {
         let v = rule().check(source);
         assert_eq!(v.len(), 1);
         assert!(v[0].message.contains("bump"));
-        assert!(v[0].suggestion.as_deref().unwrap_or("").contains("extend_ttl"));
+        assert!(v[0]
+            .suggestion
+            .as_deref()
+            .unwrap_or("")
+            .contains("extend_ttl"));
     }
 
     #[test]
@@ -357,8 +361,11 @@ mod tests {
         "#;
         let v = rule().check(source);
         assert!(v.iter().any(|x| x.message.contains("RawVal")));
-        let suggestion = v.iter().find(|x| x.message.contains("RawVal"))
-            .and_then(|x| x.suggestion.as_deref()).unwrap_or("");
+        let suggestion = v
+            .iter()
+            .find(|x| x.message.contains("RawVal"))
+            .and_then(|x| x.suggestion.as_deref())
+            .unwrap_or("");
         assert!(suggestion.contains("Val"));
     }
 
@@ -385,7 +392,11 @@ mod tests {
         let v = rule().check(source);
         assert_eq!(v.len(), 1);
         assert!(v[0].message.contains("deployer"));
-        assert!(v[0].suggestion.as_deref().unwrap_or("").contains("deploy_v2"));
+        assert!(v[0]
+            .suggestion
+            .as_deref()
+            .unwrap_or("")
+            .contains("deploy_v2"));
     }
 
     #[test]
@@ -396,7 +407,11 @@ mod tests {
             }
         "#;
         let v = rule().check(source);
-        assert_eq!(v.len(), 0, "deploy_v2 is the correct v22 API and must not fire");
+        assert_eq!(
+            v.len(),
+            0,
+            "deploy_v2 is the correct v22 API and must not fire"
+        );
     }
 
     // ── SDK version gate ─────────────────────────────────────────────────────
@@ -425,7 +440,10 @@ mod tests {
             fn store(env: Env) { env.storage().persistent().bump(100); }
         "#;
         let rule = DeprecatedSdkUsageRule::with_sdk_major(None);
-        assert!(!rule.check(source).is_empty(), "unknown SDK version should emit conservatively");
+        assert!(
+            !rule.check(source).is_empty(),
+            "unknown SDK version should emit conservatively"
+        );
     }
 
     #[test]

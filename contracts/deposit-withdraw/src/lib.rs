@@ -90,10 +90,12 @@ impl DepositWithdraw {
     pub fn withdraw_unsafe(
         env: Env,
         account: Address,
+        recipient: Address,
         token: Address,
         amount: i128,
     ) -> Result<(), Error> {
         // ⚠️  `account.require_auth()` is intentionally omitted here.
+        // `recipient` is accepted without any auth check — demonstrating the S001 auth-gap.
 
         let key = DataKey::Balance(account.clone());
         let bal: i128 = env.storage().persistent().get(&key).unwrap_or(0);
@@ -104,9 +106,9 @@ impl DepositWithdraw {
 
         env.storage().persistent().set(&key, &(bal - amount));
 
-        // Send tokens directly to the caller — NOT to `account`
+        // Send tokens to `recipient` (caller-controlled, no auth check) — NOT to `account`
         token::Client::new(&env, &token)
-            .transfer(&env.current_contract_address(), &env.invoker(), &amount);
+            .transfer(&env.current_contract_address(), &recipient, &amount);
 
         Ok(())
     }
@@ -216,9 +218,9 @@ mod tests {
         c.deposit(&victim, &token, &1_000i128);
         assert_eq!(c.balance(&victim), 1_000);
 
-        // Attacker calls withdraw_unsafe passing victim's address — no auth check!
-        // (mock_all_auths means the absent auth is silently passed in test env)
-        c.withdraw_unsafe(&victim, &token, &1_000i128);
+        // Attacker calls withdraw_unsafe with victim's account but their own address
+        // as recipient — no auth check on recipient, demonstrating S001.
+        c.withdraw_unsafe(&victim, &attacker, &token, &1_000i128);
 
         // Victim's on-contract balance is now zero
         assert_eq!(c.balance(&victim), 0, "victim balance drained by attacker");

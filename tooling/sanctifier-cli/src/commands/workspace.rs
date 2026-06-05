@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 use crate::commands::analyze::{analyze_single_file, collect_rs_files, run_with_timeout};
+use crate::commands::color as c;
 use crate::vulndb::VulnDatabase;
 use clap::Args;
-use crate::commands::color as c;
 use rayon::prelude::*;
 use sanctifier_core::{Analyzer, SanctifyConfig};
 use serde::Deserialize;
@@ -115,7 +115,10 @@ fn classify_member(member_dir: &Path) -> WorkspaceMember {
 
 fn find_workspace_root(start: &Path) -> Option<PathBuf> {
     let mut current = if start.is_file() {
-        start.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| start.to_path_buf())
+        start
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| start.to_path_buf())
     } else {
         start.to_path_buf()
     };
@@ -139,7 +142,10 @@ fn find_workspace_root(start: &Path) -> Option<PathBuf> {
 
 pub fn exec(args: WorkspaceArgs) -> anyhow::Result<()> {
     let is_json = args.format == "json";
-    let specified = args.path.canonicalize().unwrap_or_else(|_| args.path.clone());
+    let specified = args
+        .path
+        .canonicalize()
+        .unwrap_or_else(|_| args.path.clone());
     let workspace_cargo = specified.join("Cargo.toml");
 
     // Determine workspace root: if the specified path already has a Cargo.toml with [workspace],

@@ -47,13 +47,13 @@ impl HookInstaller {
     /// Find the .git directory by walking up from the current directory
     pub fn find_git_dir() -> anyhow::Result<PathBuf> {
         let mut current = std::env::current_dir()?;
-        
+
         loop {
             let git_dir = current.join(".git");
             if git_dir.exists() && git_dir.is_dir() {
                 return Ok(git_dir);
             }
-            
+
             if !current.pop() {
                 anyhow::bail!("Not a git repository (or any parent up to mount point)");
             }
@@ -87,15 +87,15 @@ impl HookInstaller {
     /// Write a hook file with executable permissions
     pub fn write_hook(hooks_dir: &Path, hook_name: &str, content: &str) -> anyhow::Result<PathBuf> {
         let hook_path = hooks_dir.join(hook_name);
-        
+
         // Ensure hooks directory exists
         if !hooks_dir.exists() {
             fs::create_dir_all(hooks_dir)?;
         }
-        
+
         // Write the hook file
         fs::write(&hook_path, content)?;
-        
+
         // Make the hook executable (Unix-like systems)
         #[cfg(unix)]
         {
@@ -104,7 +104,7 @@ impl HookInstaller {
             perms.set_mode(0o755);
             fs::set_permissions(&hook_path, perms)?;
         }
-        
+
         Ok(hook_path)
     }
 
@@ -119,10 +119,7 @@ impl HookInstaller {
                 ("pre-push", HUSKY_PRE_PUSH),
             ]
         } else {
-            vec![
-                ("pre-commit", PRE_COMMIT_HOOK),
-                ("pre-push", PRE_PUSH_HOOK),
-            ]
+            vec![("pre-commit", PRE_COMMIT_HOOK), ("pre-push", PRE_PUSH_HOOK)]
         };
 
         for (hook_name, hook_content) in hooks {
@@ -165,22 +162,25 @@ pub struct OutputFormatter;
 impl OutputFormatter {
     pub fn display_success(installed_hooks: &[PathBuf], use_husky: bool) {
         if installed_hooks.is_empty() {
-            println!("{} No hooks were installed (already exist, use --force to overwrite)", c::yellow("⚠"));
+            println!(
+                "{} No hooks were installed (already exist, use --force to overwrite)",
+                c::yellow("⚠")
+            );
             return;
         }
 
         println!("{} Git hooks installed successfully!", c::green("✓"));
-        
+
         if use_husky {
             println!("   Using Husky hooks in .husky/");
         } else {
             println!("   Using native Git hooks in .git/hooks/");
         }
-        
+
         for hook in installed_hooks {
             println!("   • {}", hook.display());
         }
-        
+
         println!("\n{} Sanctifier will now run automatically:", c::green("ℹ"));
         println!("   • Before each commit (pre-commit)");
         println!("   • Before each push (pre-push)");
@@ -198,7 +198,7 @@ impl OutputFormatter {
 pub fn exec(args: InstallHooksArgs) -> anyhow::Result<()> {
     // Auto-detect Husky if --husky flag is not provided
     let use_husky = args.husky || HookInstaller::is_husky_installed();
-    
+
     if use_husky && !HookInstaller::is_husky_installed() {
         anyhow::bail!("Husky is not installed in this project. Run 'npx husky init' first or omit --husky flag.");
     }
@@ -219,10 +219,15 @@ pub fn exec(args: InstallHooksArgs) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    // Tests that call set_current_dir must hold this lock — the call is process-wide.
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_find_git_dir_in_current_directory() {
+        let _guard = CWD_LOCK.lock().unwrap();
         let temp_dir = TempDir::new().unwrap();
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir(&git_dir).unwrap();
@@ -231,19 +236,23 @@ mod tests {
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let result = HookInstaller::find_git_dir();
-        
+
         std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), git_dir);
+        assert_eq!(
+            result.unwrap().canonicalize().unwrap(),
+            git_dir.canonicalize().unwrap()
+        );
     }
 
     #[test]
     fn test_find_git_dir_in_parent_directory() {
+        let _guard = CWD_LOCK.lock().unwrap();
         let temp_dir = TempDir::new().unwrap();
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir(&git_dir).unwrap();
-        
+
         let sub_dir = temp_dir.path().join("subdir");
         fs::create_dir(&sub_dir).unwrap();
 
@@ -251,26 +260,33 @@ mod tests {
         std::env::set_current_dir(&sub_dir).unwrap();
 
         let result = HookInstaller::find_git_dir();
-        
+
         std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), git_dir);
+        assert_eq!(
+            result.unwrap().canonicalize().unwrap(),
+            git_dir.canonicalize().unwrap()
+        );
     }
 
     #[test]
     fn test_find_git_dir_not_found() {
+        let _guard = CWD_LOCK.lock().unwrap();
         let temp_dir = TempDir::new().unwrap();
 
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let result = HookInstaller::find_git_dir();
-        
+
         std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Not a git repository"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Not a git repository"));
     }
 
     #[test]
@@ -335,7 +351,7 @@ mod tests {
     #[cfg(unix)]
     fn test_write_hook_is_executable() {
         use std::os::unix::fs::PermissionsExt;
-        
+
         let temp_dir = TempDir::new().unwrap();
         let hooks_dir = temp_dir.path().join("hooks");
 
@@ -345,13 +361,14 @@ mod tests {
         let hook_path = result.unwrap();
         let metadata = fs::metadata(&hook_path).unwrap();
         let permissions = metadata.permissions();
-        
+
         // Check that the file is executable (0o755 = rwxr-xr-x)
         assert_eq!(permissions.mode() & 0o111, 0o111);
     }
 
     #[test]
     fn test_get_hooks_dir_without_husky() {
+        let _guard = CWD_LOCK.lock().unwrap();
         let temp_dir = TempDir::new().unwrap();
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir(&git_dir).unwrap();
@@ -360,15 +377,19 @@ mod tests {
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let result = HookInstaller::get_hooks_dir(false);
-        
+
         std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), git_dir.join("hooks"));
+        assert_eq!(
+            result.unwrap(),
+            git_dir.canonicalize().unwrap().join("hooks")
+        );
     }
 
     #[test]
     fn test_get_hooks_dir_with_husky() {
+        let _guard = CWD_LOCK.lock().unwrap();
         let temp_dir = TempDir::new().unwrap();
         let husky_dir = temp_dir.path().join(".husky");
         fs::create_dir(&husky_dir).unwrap();
@@ -377,7 +398,7 @@ mod tests {
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let result = HookInstaller::get_hooks_dir(true);
-        
+
         std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
@@ -386,16 +407,20 @@ mod tests {
 
     #[test]
     fn test_get_hooks_dir_with_husky_not_installed() {
+        let _guard = CWD_LOCK.lock().unwrap();
         let temp_dir = TempDir::new().unwrap();
 
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let result = HookInstaller::get_hooks_dir(true);
-        
+
         std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Husky is not installed"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Husky is not installed"));
     }
 }

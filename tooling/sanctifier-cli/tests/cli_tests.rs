@@ -759,11 +759,7 @@ fn test_ndjson_output_structure() {
 fn test_ndjson_finding_fields() {
     let dir = tempdir().unwrap();
     let contract = dir.path().join("contract.rs");
-    fs::write(
-        &contract,
-        r#"fn add(a: u64, b: u64) -> u64 { a + b }"#,
-    )
-    .unwrap();
+    fs::write(&contract, r#"fn add(a: u64, b: u64) -> u64 { a + b }"#).unwrap();
 
     let output = Command::cargo_bin("sanctifier")
         .unwrap()
@@ -779,14 +775,23 @@ fn test_ndjson_finding_fields() {
         .filter(|v: &Value| v["event"] == "finding")
         .collect();
 
-    assert!(!finding_lines.is_empty(), "must emit at least one finding for unchecked arithmetic");
+    assert!(
+        !finding_lines.is_empty(),
+        "must emit at least one finding for unchecked arithmetic"
+    );
 
     for finding in &finding_lines {
         assert!(finding["file"].is_string(), "finding must have file");
         assert!(finding["rule"].is_string(), "finding must have rule");
-        assert!(finding["severity"].is_string(), "finding must have severity");
+        assert!(
+            finding["severity"].is_string(),
+            "finding must have severity"
+        );
         assert!(finding["message"].is_string(), "finding must have message");
-        assert!(finding["location"].is_string(), "finding must have location");
+        assert!(
+            finding["location"].is_string(),
+            "finding must have location"
+        );
     }
 }
 
@@ -819,7 +824,7 @@ fn test_ndjson_clean_file_emits_done() {
 fn test_s029_require_auth_for_args_detection() {
     let dir = tempdir().unwrap();
     let contract = dir.path().join("s029_test.rs");
-    
+
     // Write a contract with vulnerable require_auth usage
     fs::write(
         &contract,
@@ -886,7 +891,10 @@ impl TestContract {
         "Message should mention require_auth_for_args"
     );
     assert!(
-        violation["location"].as_str().unwrap().contains("set_admin"),
+        violation["location"]
+            .as_str()
+            .unwrap()
+            .contains("set_admin"),
         "Violation should be in set_admin function"
     );
 }
@@ -896,7 +904,7 @@ impl TestContract {
 fn test_s029_ndjson_format() {
     let dir = tempdir().unwrap();
     let contract = dir.path().join("s029_ndjson.rs");
-    
+
     fs::write(
         &contract,
         r#"

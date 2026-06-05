@@ -85,11 +85,11 @@ jobs:
 
       - name: Bolero — fuzz_raw_bytes_no_panic (60s)
         working-directory: contracts/my-contract
-        run: cargo bolero test fuzz_raw_bytes_no_panic --time 60s
+        run: cargo bolero test fuzz_raw_bytes_no_panic --timeout 60
 
       - name: Bolero — fuzz_structured_message_no_panic (60s)
         working-directory: contracts/my-contract
-        run: cargo bolero test fuzz_structured_message_no_panic --time 60s
+        run: cargo bolero test fuzz_structured_message_no_panic --timeout 60
 
       - name: Install cargo-fuzz
         run: cargo install --locked cargo-fuzz

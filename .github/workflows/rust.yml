@@ -139,7 +139,13 @@ jobs:
       - name: Generate missing snapshots
         env:
           INSTA_UPDATE: new
-        run: cargo test --test sarif_snapshots -p sanctifier-core
+        run: cargo test --test sarif_snapshots -p sanctifier-core --no-default-features
 
-      - name: Verify snapshots are committed and unchanged
-        run: cargo insta review --no-input --check
+      - name: Verify no pending snapshots
+        run: |
+          cargo insta pending-snapshots
+          count=$(cargo insta pending-snapshots 2>&1 | grep -c '\.snap' || true)
+          if [ "$count" -gt 0 ]; then
+            echo "::error::Uncommitted snapshot changes detected. Run INSTA_UPDATE=new cargo test --test sarif_snapshots -p sanctifier-core --no-default-features then cargo insta accept --workspace and commit the .snap files."
+            exit 1
+          fi

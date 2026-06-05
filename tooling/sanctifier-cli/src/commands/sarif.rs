@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::path::Path;
 
 /// Validate a SARIF 2.1.0 JSON value against the bundled schema.
@@ -9,8 +10,13 @@ pub fn validate_sarif(value: &serde_json::Value) -> anyhow::Result<()> {
         .map(|p| p.join("schemas").join("sarif-2.1.0.json"))
         .unwrap_or_else(|| Path::new("schemas/sarif-2.1.0.json").to_path_buf());
 
-    let schema_text = std::fs::read_to_string(&schema_path)
-        .map_err(|e| anyhow::anyhow!("Cannot read SARIF schema at {}: {}", schema_path.display(), e))?;
+    let schema_text = std::fs::read_to_string(&schema_path).map_err(|e| {
+        anyhow::anyhow!(
+            "Cannot read SARIF schema at {}: {}",
+            schema_path.display(),
+            e
+        )
+    })?;
 
     let schema: serde_json::Value = serde_json::from_str(&schema_text)
         .map_err(|e| anyhow::anyhow!("Invalid SARIF schema JSON: {}", e))?;

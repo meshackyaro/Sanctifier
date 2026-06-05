@@ -110,6 +110,12 @@ jobs:
           git -C "$worktree" commit -m "chore: update testnet monitor badge"
           git -C "$worktree" push origin HEAD:monitor
 
-      - name: Fail when any contract is unhealthy
+      - name: Report unhealthy contracts
         if: steps.health.outputs.healthy != 'true'
-        run: exit 1
+        # continue-on-error: tracking issues are already opened above; marking
+        # the whole scheduled run as failed causes permanent red-X noise when
+        # testnet contracts expire between deployments.
+        continue-on-error: true
+        run: |
+          echo "::warning::One or more testnet contracts failed their health check. See the opened GitHub issues for details."
+          exit 1

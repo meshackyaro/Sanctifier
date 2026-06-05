@@ -34,26 +34,26 @@ pub mod unused_variable;
 /// Direct xdr::ScVal raw construction detection.
 pub mod xdr_raw_construction;
 
-/// Variable shadowing in nested scopes.
-pub mod variable_shadowing;
-/// Raw `invoke_contract` call without `try_invoke_contract` error handling.
-pub mod raw_invoke_contract;
-/// `#[test]` functions that never reference a `ContractClient`.
-pub mod shallow_test;
-/// transfer_from-style flows that consume 'from' balance without allowance checks.
-pub mod transfer_from_no_allowance;
-/// Persistent/Temporary storage writes without a TTL bump (extend_ttl).
-pub mod missing_ttl_bump;
-/// Taint propagation through tuple and struct destructures.
-pub mod taint_propagation;
-/// Static reentrancy — external call before state write (complement to runtime guard).
-pub mod static_reentrancy;
 /// Soroban SDK v22 deprecated storage/deployment API patterns.
 pub mod deprecated_sdk_usage;
-/// Detect env.ledger().timestamp() used as entropy for randomness.
-pub mod timestamp_randomness;
+/// Persistent/Temporary storage writes without a TTL bump (extend_ttl).
+pub mod missing_ttl_bump;
+/// Raw `invoke_contract` call without `try_invoke_contract` error handling.
+pub mod raw_invoke_contract;
 /// require_auth used instead of require_auth_for_args in multi-arg admin operations.
 pub mod require_auth_for_args;
+/// `#[test]` functions that never reference a `ContractClient`.
+pub mod shallow_test;
+/// Static reentrancy — external call before state write (complement to runtime guard).
+pub mod static_reentrancy;
+/// Taint propagation through tuple and struct destructures.
+pub mod taint_propagation;
+/// Detect env.ledger().timestamp() used as entropy for randomness.
+pub mod timestamp_randomness;
+/// transfer_from-style flows that consume 'from' balance without allowance checks.
+pub mod transfer_from_no_allowance;
+/// Variable shadowing in nested scopes.
+pub mod variable_shadowing;
 use serde::Serialize;
 use std::any::Any;
 

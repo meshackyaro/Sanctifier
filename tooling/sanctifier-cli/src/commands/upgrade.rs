@@ -2,11 +2,12 @@ use anyhow::{anyhow, Context};
 use clap::Args;
 use colored::Colorize;
 use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const OWNER: &str = "HyperSafeD";
 const REPO: &str = "Sanctifier";
+#[allow(dead_code)]
 const PACKAGE_NAME: &str = "sanctifier-cli";
 
 #[derive(Args, Debug)]
@@ -27,10 +28,7 @@ pub fn exec(args: UpgradeArgs) -> anyhow::Result<()> {
     println!();
 
     let latest = fetch_latest_version()?;
-    let latest_tag = latest
-        .strip_prefix('v')
-        .unwrap_or(&latest)
-        .to_string();
+    let latest_tag = latest.strip_prefix('v').unwrap_or(&latest).to_string();
 
     if !is_newer_version(current, &latest_tag) {
         println!(
@@ -41,20 +39,12 @@ pub fn exec(args: UpgradeArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    println!(
-        "  Current version : v{}",
-        current.dimmed()
-    );
-    println!(
-        "  Latest version  : v{}",
-        latest_tag.green()
-    );
+    println!("  Current version : v{}", current.dimmed());
+    println!("  Latest version  : v{}", latest_tag.green());
 
     if args.check {
         println!();
-        println!(
-            "A new version is available. Run `sanctifier upgrade` to update."
-        );
+        println!("A new version is available. Run `sanctifier upgrade` to update.");
         return Ok(());
     }
 
@@ -85,7 +75,7 @@ fn perform_upgrade(version: &str) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow!("{} not found in CHECKSUMS.txt", archive_name))?;
 
     println!("  Verifying SHA-256 checksum …");
-    let actual_hash = hex::encode(Sha256::digest(&archive_bytes));
+    let actual_hash = format!("{:x}", Sha256::digest(&archive_bytes));
     if actual_hash != expected_hash {
         anyhow::bail!(
             "Checksum mismatch for {}:\n  expected: {}\n  actual:   {}",
@@ -107,12 +97,16 @@ fn perform_upgrade(version: &str) -> anyhow::Result<()> {
 
     extract_tar_gz(&archive_path, temp_dir.path())?;
 
-    let binary_name = if cfg!(windows) { "sanctifier.exe" } else { "sanctifier" };
+    let binary_name = if cfg!(windows) {
+        "sanctifier.exe"
+    } else {
+        "sanctifier"
+    };
     let extracted_binary = find_binary(temp_dir.path(), binary_name)
         .ok_or_else(|| anyhow!("Binary '{}' not found in extracted archive", binary_name))?;
 
-    let current_exe = std::env::current_exe()
-        .context("Could not determine current executable path")?;
+    let current_exe =
+        std::env::current_exe().context("Could not determine current executable path")?;
 
     atomic_replace(&extracted_binary, &current_exe)?;
 
@@ -152,12 +146,7 @@ fn download_file(url: &str) -> anyhow::Result<Vec<u8>> {
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().unwrap_or_default();
-        anyhow::bail!(
-            "HTTP {} when fetching {}: {}",
-            status,
-            url,
-            body.trim()
-        );
+        anyhow::bail!("HTTP {} when fetching {}: {}", status, url, body.trim());
     }
 
     response
@@ -197,10 +186,8 @@ fn find_binary(dir: &Path, name: &str) -> Option<PathBuf> {
         .into_iter()
         .filter_map(|e| e.ok())
     {
-        if entry.file_type().is_file() {
-            if entry.file_name().to_string_lossy() == name {
-                return Some(entry.path().to_path_buf());
-            }
+        if entry.file_type().is_file() && entry.file_name().to_string_lossy() == name {
+            return Some(entry.path().to_path_buf());
         }
     }
     None

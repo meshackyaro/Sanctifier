@@ -2,11 +2,7 @@
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
-use sanctifier_core::SanctifyConfig;
-use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
-use tracing::error;
 
 mod commands;
 mod logging;
@@ -42,26 +38,10 @@ pub enum Commands {
     Gas(commands::gas::GasArgs),
     /// Detect potential storage key collisions in Soroban contracts
     Storage(commands::storage::StorageArgs),
-    /// Initialize Sanctifier in a new project
-    Init(commands::init::InitArgs),
     /// Install git hooks (pre-commit, pre-push) to run Sanctifier automatically
     InstallHooks(commands::install_hooks::InstallHooksArgs),
     /// Show per-contract complexity metrics (cyclomatic complexity, nesting, LOC)
     Complexity(commands::complexity::ComplexityArgs),
-    /// Generate a Graphviz DOT call graph of cross-contract calls (env.invoke_contract)
-    Callgraph {
-        /// Path to a contract directory, workspace directory, or a single .rs file
-        #[arg(default_value = ".")]
-        path: PathBuf,
-
-        /// Output format: text | json | junit
-        #[arg(short, long, default_value = "text")]
-        format: String,
-
-        /// Output DOT file path
-        #[arg(short, long, default_value = "callgraph.dot")]
-        output: PathBuf,
-    },
     /// Apply auto-fix patches to a contract; use --interactive to review each patch
     Fix(commands::fix::FixArgs),
     /// Explain a finding code (e.g. S001, S003) with details and remediation
@@ -90,6 +70,16 @@ pub enum Commands {
     Serve(commands::serve::ServeArgs),
     /// Run the analyser on a contract corpus and emit a per-rule performance table
     Benchmark(commands::benchmark::BenchmarkArgs),
+    /// Generate a DOT call-graph of cross-contract invoke_contract calls
+    Callgraph(commands::callgraph::CallgraphArgs),
+    /// Run environment sanity checks (rustc, soroban-cli, z3, cargo-expand)
+    Doctor(commands::doctor::DoctorArgs),
+    /// Export analysis findings to CSV
+    Export(commands::export::ExportArgs),
+    /// Generate a security badge SVG from a Sanctifier JSON report
+    Badge(commands::badge::BadgeArgs),
+    /// Compare two scan results and show new/resolved findings
+    Diff(commands::diff::DiffArgs),
 }
 
 fn main() {
@@ -101,36 +91,48 @@ fn main() {
 
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let result = match cli.command {
+
+    if cli.no_color {
+        commands::color::set_no_color(true);
+    }
+
+    // Initialize structured logging before dispatching
+    let log_format = match &cli.command {
+        Commands::Analyze(args) if args.format == "json" => logging::LogOutput::Json,
+        _ => logging::LogOutput::Text,
+    };
+    if let Err(e) = logging::init(log_format) {
+        eprintln!("Warning: failed to init logging: {e}");
+    }
+
+    match cli.command {
         Commands::Analyze(args) => commands::analyze::exec(args),
         Commands::Init(args) => commands::init::exec(args, None),
         Commands::Lsp(args) => commands::lsp::exec(args),
         Commands::Report(args) => commands::report::exec(args),
-    };
-
-    loop {
-        let config_path = current.join(".sanctify.toml");
-        if config_path.exists() {
-            if let Ok(content) = fs::read_to_string(&config_path) {
-                match toml::from_str(&content) {
-                    Ok(config) => return config,
-                    Err(e) => {
-                        eprintln!(
-                            "Error: Found .sanctify.toml at {} but it could not be parsed:\n  {}\n\
-                             \n\
-                             Run 'sanctifier init' to regenerate a valid config, or check the schema at:\n\
-                             https://github.com/HyperSafeD/Sanctifier/blob/main/schemas/sanctify-config.schema.json",
-                            config_path.display(),
-                            e
-                        );
-                        std::process::exit(1);
-                    }
-                }
-            }
+        Commands::Gas(args) => commands::gas::exec(args),
+        Commands::Storage(args) => commands::storage::exec(args),
+        Commands::InstallHooks(args) => commands::install_hooks::exec(args),
+        Commands::Complexity(args) => commands::complexity::exec(args),
+        Commands::Fix(args) => commands::fix::exec(args),
+        Commands::Explain(args) => commands::explain::exec(args),
+        Commands::Update => commands::update::exec(),
+        Commands::Upgrade(args) => commands::upgrade::exec(args),
+        Commands::Reentrancy(args) => commands::reentrancy::exec(args),
+        Commands::Verify(args) => commands::verify::exec(args),
+        Commands::Workspace(args) => commands::workspace::exec(args),
+        Commands::Watch(args) => commands::watch::exec(args),
+        Commands::Completions { shell } => {
+            generate(shell, &mut Cli::command(), "sanctifier", &mut io::stdout());
+            Ok(())
         }
-        if !current.pop() {
-            break;
-        }
+        Commands::Suppress(args) => commands::suppress::exec(args),
+        Commands::Serve(args) => commands::serve::exec(args),
+        Commands::Benchmark(args) => commands::benchmark::exec(args),
+        Commands::Callgraph(args) => commands::callgraph::exec(args),
+        Commands::Doctor(args) => commands::doctor::exec(args),
+        Commands::Export(args) => commands::export::exec(args),
+        Commands::Badge(args) => commands::badge::exec(args),
+        Commands::Diff(args) => commands::diff::exec(args),
     }
-    SanctifyConfig::default()
 }

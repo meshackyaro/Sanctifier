@@ -78,6 +78,7 @@ pub(crate) struct ArithVisitor {
 // Redundant ArithmeticIssue struct removed
 
 impl ArithVisitor {
+    #[allow(dead_code)]
     fn is_constant_expr(expr: &syn::Expr) -> bool {
         match expr {
             syn::Expr::Lit(_) => true,
@@ -104,6 +105,7 @@ impl ArithVisitor {
         }
     }
 
+    #[allow(dead_code)]
     fn is_non_constant_divisor(op: &syn::BinOp, right: &syn::Expr) -> bool {
         matches!(op, syn::BinOp::Div(_) | syn::BinOp::Rem(_)) && !Self::is_constant_expr(right)
     }
@@ -438,4 +440,3 @@ mod tests {
         );
     }
 }
-

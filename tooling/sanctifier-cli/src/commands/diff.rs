@@ -2,9 +2,9 @@ use crate::commands::analyze::{
     analyze_single_file, collect_rs_files, is_soroban_project, load_config, run_with_timeout,
     FileAnalysisResult, SeverityLevel,
 };
+use crate::commands::color as c;
 use crate::vulndb::{VulnDatabase, VulnMatch};
 use clap::Args;
-use crate::commands::color as c;
 use rayon::prelude::*;
 use sanctifier_core::{Analyzer, SanctifyConfig};
 use serde_json::Value;
@@ -992,7 +992,10 @@ pub fn exec(args: DiffArgs) -> anyhow::Result<()> {
         println!("   Baseline: {}", args.baseline.display());
 
         if new_count == 0 {
-            println!("   {} No new findings compared to baseline.", c::green("✅"));
+            println!(
+                "   {} No new findings compared to baseline.",
+                c::green("✅")
+            );
         } else {
             println!(
                 "   {} {} new finding(s) compared to baseline:",

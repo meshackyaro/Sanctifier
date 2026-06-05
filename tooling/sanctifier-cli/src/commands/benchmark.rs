@@ -218,7 +218,7 @@ fn mean(samples: &[f64]) -> f64 {
     samples.iter().sum::<f64>() / samples.len() as f64
 }
 
-fn percentile(samples: &mut Vec<f64>, pct: f64) -> f64 {
+fn percentile(samples: &mut [f64], pct: f64) -> f64 {
     if samples.is_empty() {
         return 0.0;
     }
@@ -276,14 +276,12 @@ mod tests {
 
     #[test]
     fn render_table_no_baseline() {
-        let timings = vec![
-            RuleTimings {
-                rule: "auth_gap".to_string(),
-                mean_ms: 1.23,
-                p95_ms: 2.34,
-                samples: vec![1.0, 1.23, 1.5],
-            },
-        ];
+        let timings = vec![RuleTimings {
+            rule: "auth_gap".to_string(),
+            mean_ms: 1.23,
+            p95_ms: 2.34,
+            samples: vec![1.0, 1.23, 1.5],
+        }];
         let table = render_table(&timings, &HashMap::new());
         assert!(table.contains("auth_gap"));
         assert!(table.contains("1.23"));

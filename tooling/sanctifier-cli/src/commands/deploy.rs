@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use clap::Args;
 use crate::commands::color as c;
+use clap::Args;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -60,14 +60,11 @@ pub fn exec(args: DeployArgs) -> anyhow::Result<()> {
     };
 
     if secret_key.is_empty() {
-
         eprintln!("   Set via --secret-key or SOROBAN_SECRET_KEY environment variable");
         std::process::exit(1);
     }
 
-    if !is_json {
-
-    }
+    let _ = is_json;
 
     // Build the contract
     let build_result = build_contract(&args.contract_path, is_json);
@@ -78,7 +75,6 @@ pub fn exec(args: DeployArgs) -> anyhow::Result<()> {
     // Find WASM file
     let wasm_path = find_wasm_file(&args.contract_path);
     if wasm_path.is_none() {
-
         std::process::exit(1);
     }
 
@@ -131,11 +127,11 @@ fn build_contract(contract_path: &PathBuf, is_json: bool) -> bool {
 
     let cargo_toml = contract_path.join("Cargo.toml");
     if !cargo_toml.exists() {
-            eprintln!(
-                "{} Error: Cargo.toml not found in {}",
-                c::red("❌"),
-                contract_path.display()
-            );
+        eprintln!(
+            "{} Error: Cargo.toml not found in {}",
+            c::red("❌"),
+            contract_path.display()
+        );
         return false;
     }
 
@@ -188,7 +184,11 @@ fn find_wasm_file(contract_path: &Path) -> Option<PathBuf> {
 
 fn deploy_contract(config: &DeploymentConfig, is_json: bool) -> Result<String, String> {
     if !is_json {
-        println!("{} Deploying to {}...", c::bright_cyan("📦"), config.network);
+        println!(
+            "{} Deploying to {}...",
+            c::bright_cyan("📦"),
+            config.network
+        );
     }
 
     let output = Command::new("soroban")

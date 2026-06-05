@@ -1,7 +1,7 @@
 //! `sanctifier reentrancy` — run the reentrancy detector on a contract file.
 
-use clap::Args;
 use crate::commands::color as c;
+use clap::Args;
 use sanctifier_core::rules::reentrancy::ReentrancyRule;
 use sanctifier_core::rules::{Rule, Severity};
 use std::fs;
@@ -71,7 +71,7 @@ pub fn exec(args: ReentrancyArgs) -> anyhow::Result<()> {
         if patches.is_empty() {
             println!("\n{} No auto-fix patches available.", c::blue_info());
         } else {
-            println!("\n{} Auto-fix patches ({}):", "🔧", patches.len());
+            println!("\n🔧 Auto-fix patches ({}):", patches.len());
             for patch in &patches {
                 println!("   • {} (line {})", patch.description, patch.start_line);
             }

@@ -172,20 +172,20 @@ fn scan_expr(expr: &syn::Expr, state: &mut TaintState<'_>) {
             }
 
             // Detect sink: storage write or external call
-            if is_storage_write(&method, &mc.receiver) || is_external_call(&method) {
-                if !state.has_auth {
-                    // Check if any argument uses a tainted variable
-                    for arg in &mc.args {
-                        if let Some(var) = first_tainted_ident(arg, &state.tainted) {
-                            use syn::spanned::Spanned;
-                            let line = mc.span().start().line;
-                            state.violations.push(TaintViolation {
-                                fn_name: state.fn_name.to_string(),
-                                tainted_var: var,
-                                sink: method.clone(),
-                                line,
-                            });
-                        }
+            if (is_storage_write(&method, &mc.receiver) || is_external_call(&method))
+                && !state.has_auth
+            {
+                // Check if any argument uses a tainted variable
+                for arg in &mc.args {
+                    if let Some(var) = first_tainted_ident(arg, &state.tainted) {
+                        use syn::spanned::Spanned;
+                        let line = mc.span().start().line;
+                        state.violations.push(TaintViolation {
+                            fn_name: state.fn_name.to_string(),
+                            tainted_var: var,
+                            sink: method.clone(),
+                            line,
+                        });
                     }
                 }
             }
@@ -312,8 +312,7 @@ fn first_tainted_ident(expr: &syn::Expr, tainted: &HashSet<String>) -> Option<St
             None
         }
         syn::Expr::Binary(b) => {
-            first_tainted_ident(&b.left, tainted)
-                .or_else(|| first_tainted_ident(&b.right, tainted))
+            first_tainted_ident(&b.left, tainted).or_else(|| first_tainted_ident(&b.right, tainted))
         }
         _ => None,
     }
@@ -324,11 +323,17 @@ fn is_storage_write(method: &str, receiver: &syn::Expr) -> bool {
         return false;
     }
     let s = quote::quote!(#receiver).to_string();
-    s.contains("storage") || s.contains("persistent") || s.contains("temporary") || s.contains("instance")
+    s.contains("storage")
+        || s.contains("persistent")
+        || s.contains("temporary")
+        || s.contains("instance")
 }
 
 fn is_external_call(method: &str) -> bool {
-    matches!(method, "invoke_contract" | "try_invoke_contract" | "invoke_contract_check")
+    matches!(
+        method,
+        "invoke_contract" | "try_invoke_contract" | "invoke_contract_check"
+    )
 }
 
 // ── Unit tests ─────────────────────────────────────────────────────────────────
@@ -353,7 +358,10 @@ mod tests {
             }
         "#;
         let v = rule().check(source);
-        assert!(!v.is_empty(), "taint through tuple destructure must be flagged");
+        assert!(
+            !v.is_empty(),
+            "taint through tuple destructure must be flagged"
+        );
         assert!(v[0].message.contains("store_pair"));
     }
 
@@ -368,7 +376,10 @@ mod tests {
             }
         "#;
         let v = rule().check(source);
-        assert!(!v.is_empty(), "taint through struct destructure must be flagged");
+        assert!(
+            !v.is_empty(),
+            "taint through struct destructure must be flagged"
+        );
     }
 
     #[test]
@@ -383,7 +394,10 @@ mod tests {
             }
         "#;
         let v = rule().check(source);
-        assert!(v.is_empty(), "function with require_auth must not be flagged");
+        assert!(
+            v.is_empty(),
+            "function with require_auth must not be flagged"
+        );
     }
 
     #[test]
@@ -396,7 +410,10 @@ mod tests {
             }
         "#;
         let v = rule().check(source);
-        assert!(v.is_empty(), "private functions are not entry points and must not be flagged");
+        assert!(
+            v.is_empty(),
+            "private functions are not entry points and must not be flagged"
+        );
     }
 
     #[test]

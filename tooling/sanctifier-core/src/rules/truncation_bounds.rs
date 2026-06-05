@@ -304,7 +304,11 @@ mod tests {
             }
         "#;
         let violations = rule.check(source);
-        assert_eq!(violations.len(), 1, "u128 as u64 should be flagged as truncation");
+        assert_eq!(
+            violations.len(),
+            1,
+            "u128 as u64 should be flagged as truncation"
+        );
         assert!(violations[0].message.contains("truncation"));
         assert!(violations[0].message.contains("as u64"));
     }
@@ -318,7 +322,11 @@ mod tests {
             }
         "#;
         let violations = rule.check(source);
-        assert_eq!(violations.len(), 1, "i128 as i64 should be flagged as truncation");
+        assert_eq!(
+            violations.len(),
+            1,
+            "i128 as i64 should be flagged as truncation"
+        );
         assert!(violations[0].message.contains("as i64"));
     }
 
@@ -331,7 +339,11 @@ mod tests {
             }
         "#;
         let violations = rule.check(source);
-        assert_eq!(violations.len(), 1, "u64 as i64 sign change should be flagged");
+        assert_eq!(
+            violations.len(),
+            1,
+            "u64 as i64 sign change should be flagged"
+        );
         assert!(violations[0].message.contains("as i64"));
     }
 
@@ -344,7 +356,11 @@ mod tests {
             }
         "#;
         let violations = rule.check(source);
-        assert_eq!(violations.len(), 1, "i64 as u64 sign change should be flagged");
+        assert_eq!(
+            violations.len(),
+            1,
+            "i64 as u64 sign change should be flagged"
+        );
         assert!(violations[0].message.contains("as u64"));
     }
 
@@ -357,7 +373,11 @@ mod tests {
             }
         "#;
         let violations = rule.check(source);
-        assert_eq!(violations.len(), 1, "i32 as u32 sign change should be flagged");
+        assert_eq!(
+            violations.len(),
+            1,
+            "i32 as u32 sign change should be flagged"
+        );
     }
 
     // ── #[allow(sanctifier::truncate)] opt-out ────────────────────────────────

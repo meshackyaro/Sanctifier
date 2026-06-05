@@ -99,8 +99,20 @@ jobs:
           soroban network ls
           soroban network info --network testnet
 
+      - name: Check deployment secrets
+        id: check-key
+        run: |
+          if [[ -n "${SOROBAN_SECRET_KEY:-}" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SOROBAN_SECRET_KEY secret is not configured — deployment steps will be skipped. Add the secret to the repository to enable live deployments."
+          fi
+        env:
+          SOROBAN_SECRET_KEY: ${{ secrets.SOROBAN_SECRET_KEY }}
+
       - name: Deploy to Soroban testnet (Dry Run)
-        if: github.event.inputs.dry_run == 'true'
+        if: github.event.inputs.dry_run == 'true' && steps.check-key.outputs.present == 'true'
         run: |
           bash scripts/deploy-soroban-testnet.sh \
             --network testnet \
@@ -111,7 +123,7 @@ jobs:
           SOROBAN_ACCOUNT_ID: ${{ secrets.SOROBAN_ACCOUNT_ID }}
 
       - name: Deploy to Soroban testnet
-        if: github.event.inputs.dry_run != 'true'
+        if: github.event.inputs.dry_run != 'true' && steps.check-key.outputs.present == 'true'
         run: |
           bash scripts/deploy-soroban-testnet.sh \
             --network testnet \

@@ -1,7 +1,7 @@
 #![allow(dead_code)]
+use crate::commands::color as c;
 use anyhow::{bail, Context};
 use clap::Args;
-use crate::commands::color as c;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::info;

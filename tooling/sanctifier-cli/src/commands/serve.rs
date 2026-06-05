@@ -1,12 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use sanctifier_core::rules::RuleRegistry;
-use sanctifier_core::SanctifyConfig;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use warp::{Filter, Rejection, Reply};
 use sanctifier_core::analysis_cache::AnalysisCache;
-use sanctifier_core::Analyzer;
+use sanctifier_core::rules::RuleRegistry;
+use sanctifier_core::{Analyzer, SanctifyConfig};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::fs;
@@ -26,6 +22,7 @@ pub struct ServeArgs {
 
 #[derive(Clone)]
 struct AppState {
+    #[allow(dead_code)]
     registry: Arc<RuleRegistry>,
     analyzer: Arc<Analyzer>,
     cache: Arc<Mutex<AnalysisCache<serde_json::Value>>>,
@@ -38,12 +35,15 @@ pub fn exec(args: ServeArgs) -> Result<()> {
 
 async fn serve_async(args: ServeArgs) -> Result<()> {
     let registry = Arc::new(RuleRegistry::with_default_rules());
-    let state = AppState { registry };
-    let config = sanctifier_core::SanctifyConfig::default();
+    let config = SanctifyConfig::default();
     let analyzer = Arc::new(Analyzer::new(config));
     let cache = Arc::new(Mutex::new(AnalysisCache::new(100)));
 
-    let state = AppState { analyzer, cache };
+    let state = AppState {
+        registry,
+        analyzer,
+        cache,
+    };
 
     let addr: SocketAddr = format!("{}:{}", args.bind, args.port)
         .parse()
@@ -57,7 +57,6 @@ async fn serve_async(args: ServeArgs) -> Result<()> {
 
     let analyze_route = warp::post()
         .and(warp::path("analyze"))
-        .and(warp::body::bytes())
         .and(warp::body::json())
         .and(state_filter.clone())
         .and_then(handle_analyze);
@@ -103,19 +102,34 @@ async fn handle_analyze(
             let mut results = serde_json::Map::new();
 
             let collisions = analyzer.scan_storage_collisions(source);
-            results.insert("storage_collisions".into(), serde_json::to_value(collisions).unwrap_or_default());
+            results.insert(
+                "storage_collisions".into(),
+                serde_json::to_value(collisions).unwrap_or_default(),
+            );
 
             let size_warnings = analyzer.analyze_ledger_size(source);
-            results.insert("ledger_size_warnings".into(), serde_json::to_value(size_warnings).unwrap_or_default());
+            results.insert(
+                "ledger_size_warnings".into(),
+                serde_json::to_value(size_warnings).unwrap_or_default(),
+            );
 
             let unsafe_patterns = analyzer.analyze_unsafe_patterns(source);
-            results.insert("unsafe_patterns".into(), serde_json::to_value(unsafe_patterns).unwrap_or_default());
+            results.insert(
+                "unsafe_patterns".into(),
+                serde_json::to_value(unsafe_patterns).unwrap_or_default(),
+            );
 
             let auth_gaps = analyzer.scan_auth_gaps(source);
-            results.insert("auth_gaps".into(), serde_json::to_value(auth_gaps).unwrap_or_default());
+            results.insert(
+                "auth_gaps".into(),
+                serde_json::to_value(auth_gaps).unwrap_or_default(),
+            );
 
             let panic_issues = analyzer.scan_panics(source);
-            results.insert("panic_issues".into(), serde_json::to_value(panic_issues).unwrap_or_default());
+            results.insert(
+                "panic_issues".into(),
+                serde_json::to_value(panic_issues).unwrap_or_default(),
+            );
 
             serde_json::Value::Object(results)
         })

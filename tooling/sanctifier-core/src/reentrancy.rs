@@ -52,6 +52,7 @@ struct FnReentrancyState {
 struct ReentrancyViolation {
     fn_name: String,
     line: usize,
+    #[allow(dead_code)]
     col: usize,
 }
 
@@ -217,15 +218,16 @@ fn scan_expr(expr: &syn::Expr, fn_name: &str, state: &mut FnReentrancyState) {
             }
 
             // Detect invoke_contract / invoke_contract_check
-            if method == "invoke_contract" || method == "invoke_contract_check" {
-                if state.has_prior_mutation && !state.has_guard {
-                    let span = mc.span();
-                    state.violations.push(ReentrancyViolation {
-                        fn_name: fn_name.to_string(),
-                        line: span.start().line,
-                        col: span.start().column,
-                    });
-                }
+            if (method == "invoke_contract" || method == "invoke_contract_check")
+                && state.has_prior_mutation
+                && !state.has_guard
+            {
+                let span = mc.span();
+                state.violations.push(ReentrancyViolation {
+                    fn_name: fn_name.to_string(),
+                    line: span.start().line,
+                    col: span.start().column,
+                });
             }
 
             // Recurse
@@ -238,15 +240,16 @@ fn scan_expr(expr: &syn::Expr, fn_name: &str, state: &mut FnReentrancyState) {
             if let syn::Expr::Path(p) = &*c.func {
                 if let Some(seg) = p.path.segments.last() {
                     let ident = seg.ident.to_string();
-                    if ident == "invoke_contract" || ident == "invoke_contract_check" {
-                        if state.has_prior_mutation && !state.has_guard {
-                            let span = c.span();
-                            state.violations.push(ReentrancyViolation {
-                                fn_name: fn_name.to_string(),
-                                line: span.start().line,
-                                col: span.start().column,
-                            });
-                        }
+                    if (ident == "invoke_contract" || ident == "invoke_contract_check")
+                        && state.has_prior_mutation
+                        && !state.has_guard
+                    {
+                        let span = c.span();
+                        state.violations.push(ReentrancyViolation {
+                            fn_name: fn_name.to_string(),
+                            line: span.start().line,
+                            col: span.start().column,
+                        });
                     }
                 }
             }
@@ -474,7 +477,10 @@ mod tests {
             }
         "#;
         let violations = rule().check(source);
-        assert!(!violations.is_empty(), "token transfer before invoke should be flagged");
+        assert!(
+            !violations.is_empty(),
+            "token transfer before invoke should be flagged"
+        );
     }
 
     #[test]
@@ -488,7 +494,10 @@ mod tests {
             }
         "#;
         let violations = rule().check(source);
-        assert!(!violations.is_empty(), "storage remove before invoke should be flagged");
+        assert!(
+            !violations.is_empty(),
+            "storage remove before invoke should be flagged"
+        );
     }
 
     // ── False-positive / safe cases ───────────────────────────────────────────
@@ -504,7 +513,10 @@ mod tests {
             }
         "#;
         let violations = rule().check(source);
-        assert!(violations.is_empty(), "invoke before write is safe (checks-effects-interactions)");
+        assert!(
+            violations.is_empty(),
+            "invoke before write is safe (checks-effects-interactions)"
+        );
     }
 
     #[test]
@@ -522,7 +534,10 @@ mod tests {
             }
         "#;
         let violations = rule().check(source);
-        assert!(violations.is_empty(), "guarded function must not be flagged");
+        assert!(
+            violations.is_empty(),
+            "guarded function must not be flagged"
+        );
     }
 
     #[test]
@@ -535,7 +550,10 @@ mod tests {
             }
         "#;
         let violations = rule().check(source);
-        assert!(violations.is_empty(), "read-only function must not be flagged");
+        assert!(
+            violations.is_empty(),
+            "read-only function must not be flagged"
+        );
     }
 
     #[test]
@@ -588,7 +606,6 @@ mod tests {
         assert!(patch.replacement.contains("panic!"));
         assert!(patch.replacement.contains("invoke_contract"));
     }
-
 }
 
 // ── Public API for call graph analysis ────────────────────────────────────────
@@ -597,7 +614,7 @@ mod tests {
 /// This is a simplified implementation that extracts cross-contract calls.
 pub fn scan_invoke_contract_calls(source: &str) -> Vec<ReentrancyEdge> {
     let mut edges = Vec::new();
-    
+
     let file = match parse_str::<syn::File>(source) {
         Ok(f) => f,
         Err(_) => return edges,
@@ -642,7 +659,7 @@ fn scan_expr_for_calls(expr: &syn::Expr, fn_name: &str, edges: &mut Vec<Reentran
                 } else {
                     "<unknown>".to_string()
                 };
-                
+
                 edges.push(ReentrancyEdge {
                     caller_function: fn_name.to_string(),
                     target_contract: target,
@@ -663,7 +680,7 @@ fn scan_expr_for_calls(expr: &syn::Expr, fn_name: &str, edges: &mut Vec<Reentran
                         } else {
                             "<unknown>".to_string()
                         };
-                        
+
                         edges.push(ReentrancyEdge {
                             caller_function: fn_name.to_string(),
                             target_contract: target,
@@ -692,4 +709,3 @@ fn scan_expr_for_calls(expr: &syn::Expr, fn_name: &str, edges: &mut Vec<Reentran
         _ => {}
     }
 }
-

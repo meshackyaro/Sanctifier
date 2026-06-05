@@ -51,17 +51,11 @@ impl Rule for TimestampRandomnessRule {
                     if let syn::ImplItem::Fn(f) = impl_item {
                         let fn_name = f.sig.ident.to_string();
                         let fn_name_lower = fn_name.to_lowercase();
-                        let fn_is_sensitive = SENSITIVE_NAMES
-                            .iter()
-                            .any(|kw| fn_name_lower.contains(kw));
+                        let fn_is_sensitive =
+                            SENSITIVE_NAMES.iter().any(|kw| fn_name_lower.contains(kw));
 
                         let mut findings: Vec<(String, String)> = Vec::new();
-                        scan_block(
-                            &f.block,
-                            &fn_name,
-                            fn_is_sensitive,
-                            &mut findings,
-                        );
+                        scan_block(&f.block, &fn_name, fn_is_sensitive, &mut findings);
 
                         for (location, context) in findings {
                             violations.push(
@@ -111,12 +105,7 @@ fn scan_block(
 
                 if let Some(init) = &local.init {
                     let sensitive = fn_is_sensitive || var_is_sensitive;
-                    scan_expr(
-                        &init.expr,
-                        fn_name,
-                        sensitive,
-                        findings,
-                    );
+                    scan_expr(&init.expr, fn_name, sensitive, findings);
                 }
             }
             syn::Stmt::Expr(expr, _) => {
@@ -286,7 +275,10 @@ mod tests {
             }
         "#;
         let violations = rule.check(source);
-        assert!(!violations.is_empty(), "timestamp in pick_winner must be flagged");
+        assert!(
+            !violations.is_empty(),
+            "timestamp in pick_winner must be flagged"
+        );
         assert!(violations[0].message.contains("pick_winner"));
     }
 
@@ -302,7 +294,10 @@ mod tests {
             }
         "#;
         let violations = rule.check(source);
-        assert!(!violations.is_empty(), "timestamp assigned to 'seed' must be flagged");
+        assert!(
+            !violations.is_empty(),
+            "timestamp assigned to 'seed' must be flagged"
+        );
     }
 
     #[test]
@@ -317,7 +312,10 @@ mod tests {
             }
         "#;
         let violations = rule.check(source);
-        assert!(!violations.is_empty(), "timestamp assigned to 'rand' must be flagged");
+        assert!(
+            !violations.is_empty(),
+            "timestamp assigned to 'rand' must be flagged"
+        );
     }
 
     #[test]
@@ -331,7 +329,10 @@ mod tests {
             }
         "#;
         let violations = rule.check(source);
-        assert!(!violations.is_empty(), "timestamp in draw_winner must be flagged");
+        assert!(
+            !violations.is_empty(),
+            "timestamp in draw_winner must be flagged"
+        );
     }
 
     #[test]
@@ -345,7 +346,10 @@ mod tests {
             }
         "#;
         let violations = rule.check(source);
-        assert!(violations.is_empty(), "timestamp for time comparison must not be flagged");
+        assert!(
+            violations.is_empty(),
+            "timestamp for time comparison must not be flagged"
+        );
     }
 
     #[test]

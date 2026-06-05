@@ -8,6 +8,7 @@ use syn::visit::Visit;
 use syn::{parse_str, Fields, File, Item, Meta, Type};
 use thiserror::Error;
 
+pub mod analysis_cache;
 pub mod complexity;
 pub mod finding_codes;
 pub mod gas_estimator;
@@ -766,9 +767,16 @@ impl Analyzer {
                         if is_init_fn(&fn_name) {
                             report.init_functions.push(fn_name.clone());
                             let has_guard = fn_has_reinit_guard(&f.block);
-                            let severity_str = if has_guard { "medium".to_string() } else { "critical".to_string() };
+                            let severity_str = if has_guard {
+                                "medium".to_string()
+                            } else {
+                                "critical".to_string()
+                            };
                             let message = if has_guard {
-                                format!("Initialization function '{}' detected (with re-init guard)", fn_name)
+                                format!(
+                                    "Initialization function '{}' detected (with re-init guard)",
+                                    fn_name
+                                )
                             } else {
                                 format!("Initialization function '{}' is callable more than once — add re-init guard", fn_name)
                             };
@@ -796,7 +804,7 @@ impl Analyzer {
                                 ),
                                 suggestion: "Verify timelock delay is enforced before upgrade"
                                     .to_string(),
-                                    severity: "medium".to_string(),
+                                severity: "medium".to_string(),
                             });
                         }
                     }
@@ -1757,8 +1765,7 @@ fn expr_has_storage_guard(expr: &syn::Expr) -> bool {
                 || cond_str.contains(".try_get(");
             if !has_storage_check {
                 // Check sub-expressions recursively
-                return expr_has_storage_guard(&i.cond)
-                    || block_has_early_exit(&i.then_branch);
+                return expr_has_storage_guard(&i.cond) || block_has_early_exit(&i.then_branch);
             }
             // Check if either branch has an early return/panic
             if block_has_early_exit(&i.then_branch) {
@@ -1774,9 +1781,7 @@ fn expr_has_storage_guard(expr: &syn::Expr) -> bool {
         syn::Expr::Block(b) => fn_has_reinit_guard(&b.block),
         syn::Expr::Unary(u) => expr_has_storage_guard(&u.expr),
         syn::Expr::Paren(p) => expr_has_storage_guard(&p.expr),
-        syn::Expr::Binary(b) => {
-            expr_has_storage_guard(&b.left) || expr_has_storage_guard(&b.right)
-        }
+        syn::Expr::Binary(b) => expr_has_storage_guard(&b.left) || expr_has_storage_guard(&b.right),
         _ => false,
     }
 }

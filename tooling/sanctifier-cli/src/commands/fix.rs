@@ -1,5 +1,5 @@
-use clap::Args;
 use crate::commands::color as c;
+use clap::Args;
 use sanctifier_core::{patcher::Patcher, rules::Patch, RuleRegistry};
 use std::fs;
 use std::io::{self, BufRead, Write};
@@ -94,7 +94,11 @@ pub fn exec(args: FixArgs) -> anyhow::Result<()> {
         let patched = Patcher::apply_patches(&source, &selected);
         fs::write(file_path, patched)?;
         total_applied += selected.len();
-        println!("  {} Applied {} patch(es)", c::green_check(), selected.len());
+        println!(
+            "  {} Applied {} patch(es)",
+            c::green_check(),
+            selected.len()
+        );
     }
 
     println!(
