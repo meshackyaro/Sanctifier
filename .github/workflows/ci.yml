@@ -237,6 +237,21 @@ jobs:
       - name: Install frontend dependencies
         run: cd frontend && npm install
 
+      - name: Install Chromium runtime dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+            libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
+            libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+            libpango-1.0-0 libcairo2 \
+            libasound2t64 2>/dev/null || \
+          sudo apt-get install -y --no-install-recommends \
+            libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+            libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
+            libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+            libpango-1.0-0 libcairo2 libasound2
+
       - name: Cache Playwright browsers
         uses: actions/cache@v5
         id: playwright-cache
@@ -244,13 +259,9 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-1.59.1
 
-      - name: Install Playwright browsers (full, cache miss)
+      - name: Install Playwright chromium browser
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: cd frontend && npx playwright install --with-deps chromium
-
-      - name: Install Playwright system deps (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: cd frontend && npx playwright install-deps chromium
+        run: cd frontend && npx playwright install chromium
 
       - name: Run e2e tests
         run: cd frontend && npm run test:e2e
@@ -290,6 +301,21 @@ jobs:
       - name: Install frontend dependencies
         run: cd frontend && npm install
 
+      - name: Install Chromium runtime dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+            libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
+            libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+            libpango-1.0-0 libcairo2 \
+            libasound2t64 2>/dev/null || \
+          sudo apt-get install -y --no-install-recommends \
+            libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+            libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
+            libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+            libpango-1.0-0 libcairo2 libasound2
+
       - name: Cache Playwright browsers
         uses: actions/cache@v5
         id: playwright-cache
@@ -297,13 +323,9 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-1.59.1
 
-      - name: Install Playwright browsers (full, cache miss)
+      - name: Install Playwright chromium browser
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: cd frontend && npx playwright install --with-deps chromium
-
-      - name: Install Playwright system deps (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: cd frontend && npx playwright install-deps chromium
+        run: cd frontend && npx playwright install chromium
 
       - name: Run schema rendering e2e suite
         run: cd frontend && npm run test:e2e:schema
