@@ -4,10 +4,11 @@
 //! Every rule must produce identical results whether the input uses LF or CRLF.
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod crlf_tests {
-    use sanctifier_core::rules::{
-        PanicDetectionRule, ReentrancyRule, UnhandledResultRule,
-        InstanceStorageMisuseRule, Rule,
+    use crate::rules::{
+        instance_storage_misuse::InstanceStorageMisuseRule, panic_detection::PanicDetectionRule,
+        reentrancy::ReentrancyRule, unhandled_result::UnhandledResultRule, Rule,
     };
 
     /// Convert LF source to CRLF by replacing every `\n` with `\r\n`.
@@ -17,8 +18,8 @@ mod crlf_tests {
 
     macro_rules! assert_crlf_parity {
         ($rule:expr, $source:expr, $label:expr) => {{
-            let lf_violations   = $rule.check($source);
-            let crlf_source     = to_crlf($source);
+            let lf_violations = $rule.check($source);
+            let crlf_source = to_crlf($source);
             let crlf_violations = $rule.check(&crlf_source);
             assert_eq!(
                 lf_violations.len(),
@@ -42,7 +43,11 @@ impl Contract {
 
     #[test]
     fn panic_detection_lf_crlf_parity() {
-        assert_crlf_parity!(PanicDetectionRule::new(), PANIC_SOURCE, "PanicDetectionRule");
+        assert_crlf_parity!(
+            PanicDetectionRule::new(),
+            PANIC_SOURCE,
+            "PanicDetectionRule"
+        );
     }
 
     #[test]
@@ -50,7 +55,10 @@ impl Contract {
         let rule = PanicDetectionRule::new();
         let crlf = to_crlf(PANIC_SOURCE);
         let v = rule.check(&crlf);
-        assert!(!v.is_empty(), "PanicDetectionRule must flag unwrap() in CRLF input");
+        assert!(
+            !v.is_empty(),
+            "PanicDetectionRule must flag unwrap() in CRLF input"
+        );
     }
 
     // ── UnhandledResultRule ───────────────────────────────────────────────────
@@ -66,7 +74,11 @@ fn some_fallible_call() -> Result<(), ()> { Ok(()) }
 
     #[test]
     fn unhandled_result_lf_crlf_parity() {
-        assert_crlf_parity!(UnhandledResultRule::new(), UNHANDLED_SOURCE, "UnhandledResultRule");
+        assert_crlf_parity!(
+            UnhandledResultRule::new(),
+            UNHANDLED_SOURCE,
+            "UnhandledResultRule"
+        );
     }
 
     // ── InstanceStorageMisuseRule ─────────────────────────────────────────────

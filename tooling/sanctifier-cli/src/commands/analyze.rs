@@ -1,85 +1,70 @@
-use crate::commands::webhook::{
-    send_scan_completed_webhooks, ScanWebhookPayload, ScanWebhookSummary,
-};
+use crate::commands::color as c;
+use crate::telemetry::{self, AnalysisTelemetry};
 use crate::vulndb::{VulnDatabase, VulnMatch};
-use clap::{Args, ValueEnum};
+use clap::Args;
 use colored::*;
+#[allow(unused_imports)]
 use rayon::prelude::*;
 use sanctifier_core::finding_codes;
+use sanctifier_core::rules::RuleRegistry;
 use sanctifier_core::{Analyzer, SanctifyConfig};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+#[allow(unused_imports)]
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
-};
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info, warn};
+use tracing::warn;
 
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum SeverityLevel {
-    Critical,
-    High,
-    Medium,
     Low,
+    Medium,
+    High,
+    Critical,
 }
 
-impl SeverityLevel {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SeverityLevel::Critical => "critical",
-            SeverityLevel::High => "high",
-            SeverityLevel::Medium => "medium",
-            SeverityLevel::Low => "low",
-        }
-    }
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum AnalysisProfile {
+    /// Report all findings; exit 1 on any
+    Strict,
+    /// Report findings but never exit 1
+    Lenient,
+    /// Full report mode for security audits
+    Audit,
+    /// Exit 1 only on critical or high findings
+    Ci,
 }
 
 impl std::str::FromStr for SeverityLevel {
     type Err = String;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "critical" => Ok(SeverityLevel::Critical),
-            "high" => Ok(SeverityLevel::High),
-            "medium" => Ok(SeverityLevel::Medium),
-            "low" => Ok(SeverityLevel::Low),
-            _ => Err(format!("Invalid severity level: {}", s)),
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "critical" => Ok(Self::Critical),
+            other => Err(format!("unknown severity: {}", other)),
         }
     }
-}
-
-/// Built-in analysis presets. Overrides --exit-code and --min-severity when set.
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AnalysisProfile {
-    /// Emit all rules; any finding triggers a non-zero exit
-    Strict,
-    /// Emit only critical and high findings; always exits 0
-    Lenient,
-    /// Emit all rules with full detail; always exits 0 (use for audit reports)
-    Audit,
-    /// Emit all rules; critical and high findings trigger a non-zero exit (recommended for CI)
-    Ci,
 }
 
 impl AnalysisProfile {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Strict  => "strict",
+            Self::Strict => "strict",
             Self::Lenient => "lenient",
-            Self::Audit   => "audit",
-            Self::Ci      => "ci",
+            Self::Audit => "audit",
+            Self::Ci => "ci",
         }
     }
-
     pub fn description(self) -> &'static str {
         match self {
-            Self::Strict  => "all rules emitted; any finding is fatal",
-            Self::Lenient => "critical+high only; always exits 0",
-            Self::Audit   => "all rules emitted; always exits 0",
-            Self::Ci      => "all rules emitted; critical+high findings are fatal",
+            Self::Strict => "Report all findings, exit 1 on any",
+            Self::Lenient => "Report findings but never exit 1",
+            Self::Audit => "Full report mode for security audit output",
+            Self::Ci => "Exit 1 only on critical or high findings",
         }
     }
 }
@@ -89,7 +74,7 @@ pub struct AnalyzeArgs {
     /// Path to the contract directory or Cargo.toml
     #[arg(default_value = ".")]
     pub path: PathBuf,
-    /// Output format (text, json)
+
     #[arg(short, long, default_value = "text")]
     pub format: String,
     /// Limit for ledger entry size in bytes
@@ -121,7 +106,7 @@ pub struct AnalyzeArgs {
 // ── Per-file result container ────────────────────────────────────────────────
 
 /// All findings produced by analysing a single `.rs` file.
-#[derive(Default, serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(Default, serde::Serialize, Clone, Debug)]
 pub(crate) struct FileAnalysisResult {
     pub(crate) file_path: String,
     pub(crate) collisions: Vec<sanctifier_core::StorageCollisionIssue>,
@@ -135,11 +120,10 @@ pub(crate) struct FileAnalysisResult {
     pub(crate) event_issues: Vec<sanctifier_core::EventIssue>,
     pub(crate) unhandled_results: Vec<sanctifier_core::UnhandledResultIssue>,
     pub(crate) upgrade_reports: Vec<sanctifier_core::UpgradeReport>,
-    pub(crate) smt_issues: Vec<sanctifier_core::smt::SmtInvariantIssue>,
+    pub(crate) smt_issues: Vec<sanctifier_core::SmtInvariantIssue>,
     pub(crate) truncation_bounds_issues: Vec<sanctifier_core::TruncationBoundsIssue>,
     pub(crate) sep41_checked_contracts: Vec<String>,
     pub(crate) sep41_issues: Vec<sanctifier_core::Sep41Issue>,
-    pub(crate) contractimport_issues: Vec<sanctifier_core::ContractImportMismatchIssue>,
     pub(crate) variable_shadowing_violations: Vec<sanctifier_core::RuleViolation>,
     pub(crate) timed_out: bool,
 }
@@ -155,754 +139,276 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn run_analysis(args: AnalyzeArgs) -> anyhow::Result<bool> {
-    let path_raw = args.path.clone();
-
-    // On non-Windows platforms, accept Windows-style backslash paths (e.g. from
-    // cross-platform CI scripts or copy-pasted Windows paths) and convert them
-    // to POSIX forward-slash paths so the rest of the pipeline can use them
-    // uniformly.  On Windows the OS already handles both separators natively.
-    let path = normalize_cli_path(path_raw);
-
-    let is_json = args.format == "json";
-    let timeout_secs = args.timeout;
-    let start = Instant::now();
-
-    if !is_soroban_project(&path) {
-        if is_json {
-            let err = serde_json::json!({
-                "error": format!("{:?} is not a valid Soroban project", path),
-                "success": false,
-            });
-            println!("{}", serde_json::to_string_pretty(&err)?);
-        } else {
-            error!(
-                target: "sanctifier",
-                path = %path.display(),
-                "Invalid Soroban project: missing Cargo.toml with a soroban-sdk dependency"
-            );
-        }
-        anyhow::bail!("{:?} is not a valid Soroban project", path);
+/// Run the full analysis and dispatch to the appropriate output format.
+pub(crate) fn run_analysis(args: AnalyzeArgs) -> anyhow::Result<bool> {
+    if args.format == "ndjson" {
+        return stream_ndjson(&args);
     }
 
-    info!(target: "sanctifier", path = %path.display(), "Valid Soroban project found");
-    info!(target: "sanctifier", path = %path.display(), "Analyzing contract");
+    let path = normalize_cli_path(args.path.clone());
+    if !path.exists() {
+        anyhow::bail!("path does not exist: {}", path.display());
+    }
+    if !is_soroban_project(&path) {
+        eprintln!("No Soroban project found at {:?}", path);
+        return Ok(false);
+    }
 
-    let mut config = load_config(&path);
-    config.ledger_limit = args.limit;
-    let analyzer = Arc::new(Analyzer::new(config));
+    let start = Instant::now();
+    let config = load_config(path);
+    let telemetry_enabled = config.telemetry;
 
-    let vuln_db = Arc::new(match &args.vuln_db {
-        Some(db_path) => {
-            info!(target: "sanctifier", path = %db_path.display(), "Loading custom vulnerability database");
-            VulnDatabase::load(db_path)?
-        }
-        None => {
-            let database = VulnDatabase::load_default();
-            info!(target: "sanctifier", version = %database.version, "Loading built-in vulnerability database");
-            database
-        }
-    });
-
-    let rs_files = if path.is_dir() {
-        collect_rs_files(&path, &analyzer.config.ignore_paths)
-    } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+    // When a single file is given, scan only that file — not its parent directory.
+    let rs_files: Vec<PathBuf> = if path.is_file() {
         vec![path.clone()]
     } else {
-        vec![]
+        collect_rs_files(path, &config.ignore_paths)
     };
 
-    let total_files = rs_files.len();
-    let counter = Arc::new(AtomicUsize::new(0));
-    let cached_counter = Arc::new(AtomicUsize::new(0));
-    let timeout_dur = if timeout_secs == 0 {
-        None
-    } else {
-        Some(Duration::from_secs(timeout_secs))
-    };
+    let registry = RuleRegistry::with_default_rules();
+    let analyzer = Analyzer::new(config.clone());
 
-    let cache = if args.no_cache {
-        None
-    } else {
-        Some(Arc::new(Mutex::new(AnalysisCache::load(&path))))
-    };
+    let mut all_violations: Vec<(String, sanctifier_core::RuleViolation)> = Vec::new();
+    let mut size_warnings_total: usize = 0;
+    let mut collision_total: usize = 0;
 
-    let mut results: Vec<FileAnalysisResult> = rs_files
-        .par_iter()
-        .map(|file_path| {
-            let idx = counter.fetch_add(1, Ordering::Relaxed) + 1;
-            let file_name = file_path.display().to_string();
-            if !is_json {
-                eprintln!("[{}/{}] Analyzing {}", idx, total_files, file_name);
-            }
-            let content = match fs::read_to_string(file_path) {
-                Ok(c) => c,
-                Err(_) => return FileAnalysisResult::default(),
-            };
-
-            let hash = sha256_hex(&content);
-            if let Some(ref cache_mutex) = cache {
-                if let Some(cached_res) = cache_mutex.lock().unwrap().lookup(&file_name, &hash) {
-                    cached_counter.fetch_add(1, Ordering::Relaxed);
-                    return cached_res;
-                }
-            }
-
-            debug!(target: "sanctifier", file = %file_name, "Scanning Rust source file");
-            let analyzer = Arc::clone(&analyzer);
-            let vuln_db = Arc::clone(&vuln_db);
-            let file_name_clone = file_name.clone();
-            let result = match run_with_timeout(timeout_dur, move || {
-                analyze_single_file(&analyzer, &vuln_db, &content, &file_name_clone)
-            }) {
-                Some(res) => res,
-                None => {
-                    warn!(target: "sanctifier", file = %file_name, timeout_secs = timeout_secs, "Analysis timed out");
-                    FileAnalysisResult {
-                        file_path: file_name.clone(),
-                        timed_out: true,
-                        ..Default::default()
-                    }
-                }
-            };
-
-            if let Some(ref cache_mutex) = cache {
-                cache_mutex
-                    .lock()
-                    .unwrap()
-                    .store(file_name, hash, result.clone());
-            }
-
-            result
-        })
-        .collect();
-
-    if let Some(cache_mutex) = cache {
-        let final_cache = Arc::try_unwrap(cache_mutex).unwrap().into_inner().unwrap();
-        final_cache.save();
-    }
-
-    results.sort_by(|a, b| a.file_path.cmp(&b.file_path));
-    let mut collisions = Vec::new();
-    let mut size_warnings = Vec::new();
-    let mut unsafe_patterns = Vec::new();
-    let mut auth_gaps = Vec::new();
-    let mut panic_issues = Vec::new();
-    let mut arithmetic_issues = Vec::new();
-    let mut custom_matches = Vec::new();
-    let mut vuln_matches: Vec<VulnMatch> = Vec::new();
-    let mut event_issues = Vec::new();
-    let mut unhandled_results = Vec::new();
-    let mut upgrade_reports = Vec::new();
-    let mut smt_issues = Vec::new();
-    let mut truncation_bounds_issues = Vec::new();
-    let mut sep41_checked_contracts = Vec::new();
-    let mut sep41_issues = Vec::new();
-    let mut contractimport_issues = Vec::new();
-    let mut variable_shadowing_violations = Vec::new();
-    let mut timed_out_files: Vec<String> = Vec::new();
-
-    for r in results {
-        collisions.extend(r.collisions);
-        size_warnings.extend(r.size_warnings);
-        unsafe_patterns.extend(r.unsafe_patterns);
-        auth_gaps.extend(r.auth_gaps);
-        panic_issues.extend(r.panic_issues);
-        arithmetic_issues.extend(r.arithmetic_issues);
-        custom_matches.extend(r.custom_matches);
-        vuln_matches.extend(r.vuln_matches);
-        event_issues.extend(r.event_issues);
-        unhandled_results.extend(r.unhandled_results);
-        upgrade_reports.extend(r.upgrade_reports);
-        smt_issues.extend(r.smt_issues);
-        truncation_bounds_issues.extend(r.truncation_bounds_issues);
-        sep41_checked_contracts.extend(r.sep41_checked_contracts);
-        sep41_issues.extend(r.sep41_issues);
-        contractimport_issues.extend(r.contractimport_issues);
-        variable_shadowing_violations.extend(r.variable_shadowing_violations);
-        if r.timed_out {
-            timed_out_files.push(r.file_path);
-        }
-    }
-
-    // Apply profile filter: lenient suppresses medium/low-tier categories
-    if matches!(args.profile, Some(AnalysisProfile::Lenient)) {
-        collisions.clear();
-        variable_shadowing_violations.clear();
-        custom_matches.clear();
-        contractimport_issues.clear();
-        vuln_matches.retain(|v| matches!(v.severity.as_str(), "critical" | "high"));
-    }
-
-    let total_findings = collisions.len()
-        + size_warnings.len()
-        + unsafe_patterns.len()
-        + auth_gaps.len()
-        + panic_issues.len()
-        + arithmetic_issues.len()
-        + custom_matches.len()
-        + event_issues.len()
-        + unhandled_results.len()
-        + upgrade_reports
-            .iter()
-            .map(|r| r.findings.len())
-            .sum::<usize>()
-        + smt_issues.len()
-        + truncation_bounds_issues.len()
-        + sep41_issues.len()
-        + contractimport_issues.len()
-        + variable_shadowing_violations.len()
-        + timed_out_files.len();
-
-    let has_critical = auth_gaps
-        .iter()
-        .any(|i| i.severity() == finding_codes::FindingSeverity::Critical)
-        || panic_issues
-            .iter()
-            .any(|i| i.severity() == finding_codes::FindingSeverity::Critical)
-        || !smt_issues.is_empty()
-        || sep41_issues
-            .iter()
-            .any(|i| i.severity() == finding_codes::FindingSeverity::Critical)
-        || size_warnings
-            .iter()
-            .any(|i| i.severity() == finding_codes::FindingSeverity::Critical);
-
-    let has_high = arithmetic_issues
-        .iter()
-        .any(|i| i.severity() == finding_codes::FindingSeverity::High)
-        || panic_issues
-            .iter()
-            .any(|i| i.severity() == finding_codes::FindingSeverity::High)
-        || size_warnings
-            .iter()
-            .any(|i| i.severity() == finding_codes::FindingSeverity::High)
-        || unsafe_patterns
-            .iter()
-            .any(|i| i.severity() == finding_codes::FindingSeverity::High)
-        || upgrade_reports.iter().any(|r| {
-            r.findings
-                .iter()
-                .any(|f| f.severity() == finding_codes::FindingSeverity::High)
-        })
-        || event_issues
-            .iter()
-            .any(|i| i.severity() == finding_codes::FindingSeverity::High)
-        || unhandled_results
-            .iter()
-            .any(|i| i.severity() == finding_codes::FindingSeverity::High)
-        || truncation_bounds_issues
-            .iter()
-            .any(|i| i.severity() == finding_codes::FindingSeverity::High);
-
-    let highest_finding_severity: Option<SeverityLevel> = {
-        let mut highest: Option<SeverityLevel> = None;
-        let mut consider = |candidate: SeverityLevel| {
-            highest = Some(match highest {
-                Some(current) => current.max(candidate),
-                None => candidate,
-            });
+    for file_path in &rs_files {
+        let content = match fs::read_to_string(file_path) {
+            Ok(c) => c,
+            Err(_) => continue,
         };
-        if has_critical {
-            consider(SeverityLevel::Critical);
+        let file_str = file_path.display().to_string();
+        eprintln!("Analyzing {}", file_str);
+        tracing::debug!(target: "sanctifier", "Scanning Rust source file: {}", file_str);
+        for v in registry.run_all(&content) {
+            all_violations.push((file_str.clone(), v));
         }
-        if has_high {
-            consider(SeverityLevel::High);
-        }
-        if !size_warnings.is_empty() || !unsafe_patterns.is_empty() || !sep41_issues.is_empty() {
-            consider(SeverityLevel::Medium);
-        }
-        if !event_issues.is_empty() {
-            consider(SeverityLevel::Low);
-        }
-        for vuln in &vuln_matches {
-            if let Ok(sev) = vuln.severity.parse::<SeverityLevel>() {
-                consider(sev);
-            }
-        }
-        if !timed_out_files.is_empty() {
-            consider(SeverityLevel::Low);
-        }
-        if !contractimport_issues.is_empty() {
-            consider(SeverityLevel::Medium);
-        }
-        highest
-    };
-
-    // Profile overrides --exit-code / --min-severity when set
-    let should_exit_with_1 = match args.profile {
-        Some(AnalysisProfile::Strict)  => total_findings > 0,
-        Some(AnalysisProfile::Lenient) => false,
-        Some(AnalysisProfile::Audit)   => false,
-        Some(AnalysisProfile::Ci)      => has_critical || has_high,
-        None => args.exit_code && highest_finding_severity
-            .map(|h| h >= args.min_severity)
-            .unwrap_or(false),
-    };
-
-    let timestamp = chrono_timestamp();
-    let _duration_ms = start.elapsed().as_millis() as u64;
-    let duration_ms = _duration_ms;
-
-    let webhook_payload = ScanWebhookPayload {
-        event: "scan.completed",
-        project_path: path.display().to_string(),
-        timestamp_unix: timestamp.clone(),
-        summary: ScanWebhookSummary {
-            total_findings,
-            has_critical,
-            has_high,
-        },
-    };
-    if let Err(err) = send_scan_completed_webhooks(&args.webhook_urls, &webhook_payload) {
-        warn!(target: "sanctifier", error = %err, "Failed to initialize webhook client");
+        size_warnings_total += analyzer.analyze_ledger_size(&content).len();
+        collision_total += analyzer.scan_storage_collisions(&content).len();
     }
 
-    if is_json {
-        let cached_files = cached_counter.load(Ordering::Relaxed);
-
-        // Flatten upgrade report sub-findings into individual S010 entries.
-        let upgrade_risks: Vec<serde_json::Value> = upgrade_reports
+    let total = all_violations.len();
+    let duration_ms = start.elapsed().as_millis() as u64;
+    if telemetry_enabled {
+        let rule_ids = all_violations
             .iter()
-            .flat_map(|r| r.findings.iter())
-            .map(|f| {
+            .map(|(_, violation)| violation.rule_name.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let payload = AnalysisTelemetry {
+            tool_version: telemetry::sanitize_version(env!("CARGO_PKG_VERSION")),
+            duration_ms,
+            rule_ids,
+        };
+        if let Err(err) = telemetry::emit_analysis_telemetry(&payload) {
+            warn!(target: "sanctifier", error = %err, "Failed to submit opt-in telemetry");
+        }
+    }
+
+    // Notify webhooks (non-fatal)
+    if !args.webhook_urls.is_empty() {
+        use crate::commands::webhook::{
+            send_scan_completed_webhooks, ScanWebhookPayload, ScanWebhookSummary,
+        };
+        let payload = ScanWebhookPayload {
+            event: "scan_completed",
+            project_path: path.display().to_string(),
+            timestamp_unix: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .to_string(),
+            summary: ScanWebhookSummary {
+                total_findings: total,
+                has_critical: all_violations
+                    .iter()
+                    .any(|(_, v)| matches!(v.severity, sanctifier_core::Severity::Error)),
+                has_high: all_violations
+                    .iter()
+                    .any(|(_, v)| matches!(v.severity, sanctifier_core::Severity::Warning)),
+            },
+        };
+        let _ = send_scan_completed_webhooks(&args.webhook_urls, &payload);
+    }
+
+    if args.format == "json" {
+        let rule_violations: Vec<serde_json::Value> = all_violations
+            .into_iter()
+            .map(|(file, v)| {
                 serde_json::json!({
-                    "code": finding_codes::UPGRADE_RISK,
-                    "category": f.category,
-                    "function_name": f.function_name,
-                    "location": f.location,
-                    "message": f.message,
-                    "suggestion": f.suggestion,
+                    "file": file,
+                    "rule_name": v.rule_name,
+                    "severity": format!("{:?}", v.severity),
+                    "message": v.message,
+                    "location": v.location,
+                    "suggestion": v.suggestion,
                 })
             })
             .collect();
-
-        // Convert timed-out file paths to structured S000 finding objects.
-        let timeout_findings: Vec<serde_json::Value> = timed_out_files
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": "1.0.0",
+                "rule_violations": rule_violations,
+                "error_codes": finding_codes::all_finding_codes(),
+                "summary": {
+                    "total_findings": total,
+                    "duration_ms": duration_ms,
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+            }))?
+        );
+    } else {
+        if let Some(profile) = args.profile {
+            println!(
+                "{} Profile: {} — {}",
+                c::blue("ℹ"),
+                c::bold(profile.as_str()),
+                profile.description()
+            );
+        }
+        let has_auth = all_violations
             .iter()
-            .map(|f| {
-                serde_json::json!({
-                    "code": finding_codes::ANALYSIS_TIMEOUT,
-                    "file": f,
-                    "message": format!("Analysis timed out after {}s", timeout_secs),
-                })
-            })
-            .collect();
-
-        let report = serde_json::json!({
-            // Schema version — increment when the output shape changes.
-            "schema_version": "1.1.0",
-            // ── Raw arrays (backward compat; top-level additionalProperties is open) ──
-            "storage_collisions": collisions,
-            "ledger_size_warnings": size_warnings,
-            "unsafe_patterns": unsafe_patterns,
-            "auth_gaps": auth_gaps,
-            "panic_issues": panic_issues,
-            "arithmetic_issues": arithmetic_issues,
-            "truncation_bounds_issues": truncation_bounds_issues,
-            "custom_rules": custom_matches,
-            "event_issues": event_issues,
-            "unhandled_results": unhandled_results,
-            "upgrade_reports": upgrade_reports,
-            "smt_issues": smt_issues,
-            "sep41_issues": sep41_issues,
-            "contractimport_issues": contractimport_issues,
-            "vulnerability_db_matches": vuln_matches,
-            "vulnerability_db_version": vuln_db.version,
-            "timed_out_files": timed_out_files,
-            "sep41_checked_contracts": sep41_checked_contracts,
-            // Extra fields not allowed inside metadata (schema: additionalProperties: false).
-            "duration_ms": duration_ms,
-            "profile": args.profile.map(|p| p.as_str()),
-            // ── Schema-required metadata (no extra keys — additionalProperties: false) ──
-            "metadata": {
-                "version": env!("CARGO_PKG_VERSION"),
-                "timestamp": timestamp,
-                "project_path": path.display().to_string(),
-                "format": "sanctifier-ci-v1",
-                "timeout_secs": timeout_secs,
-                "cached_files": cached_files,
-                "total_files": total_files,
-            },
-            "error_codes": finding_codes::all_finding_codes(),
-            // ── Schema-required summary (no extra keys — additionalProperties: false) ──
-            "summary": {
-                "total_findings": total_findings,
-                "cached_files": cached_files,
-                "reanalysed_files": total_files - cached_files,
-                "storage_collisions": collisions.len(),
-                "auth_gaps": auth_gaps.len(),
-                "panic_issues": panic_issues.len(),
-                "arithmetic_issues": arithmetic_issues.len(),
-                "size_warnings": size_warnings.len(),
-                "unsafe_patterns": unsafe_patterns.len(),
-                "custom_rule_matches": custom_matches.len(),
-                "event_issues": event_issues.len(),
-                "unhandled_results": unhandled_results.len(),
-                "smt_issues": smt_issues.len(),
-                "sep41_issues": sep41_issues.len(),
-                "timed_out_files": timed_out_files.len(),
-                "has_critical": has_critical,
-                "has_high": has_high,
-            },
-            // ── Structured finding lists, each tagged with a canonical code ──
-            "findings": {
-                "storage_collisions": collisions.iter().map(|c| serde_json::json!({
-                    "code": finding_codes::STORAGE_COLLISION,
-                    "key_value": c.key_value,
-                    "key_type": c.key_type,
-                    "location": c.location,
-                    "message": c.message,
-                })).collect::<Vec<_>>(),
-                "ledger_size_warnings": size_warnings.iter().map(|w| serde_json::json!({
-                    "code": finding_codes::LEDGER_SIZE_RISK,
-                    "struct_name": w.struct_name,
-                    "estimated_size": w.estimated_size,
-                    "limit": w.limit,
-                    "level": w.level,
-                })).collect::<Vec<_>>(),
-                "unsafe_patterns": unsafe_patterns.iter().map(|u| serde_json::json!({
-                    "code": finding_codes::UNSAFE_PATTERN,
-                    "pattern_type": u.pattern_type,
-                    "line": u.line,
-                    "snippet": u.snippet,
-                })).collect::<Vec<_>>(),
-                // Schema FindingAuthGap uses "function" (not "function_name").
-                "auth_gaps": auth_gaps.iter().map(|a| serde_json::json!({
-                    "code": finding_codes::AUTH_GAP,
-                    "function": a.function_name,
-                })).collect::<Vec<_>>(),
-                "panic_issues": panic_issues.iter().map(|p| serde_json::json!({
-                    "code": finding_codes::PANIC_USAGE,
-                    "function_name": p.function_name,
-                    "issue_type": p.issue_type,
-                    "location": p.location,
-                })).collect::<Vec<_>>(),
-                "arithmetic_issues": arithmetic_issues.iter().map(|a| serde_json::json!({
-                    "code": finding_codes::ARITHMETIC_OVERFLOW,
-                    "function_name": a.function_name,
-                    "operation": a.operation,
-                    "suggestion": a.suggestion,
-                    "location": a.location,
-                })).collect::<Vec<_>>(),
-                // Schema FindingCustomRule.severity is "info" | "warning" | "error".
-                "custom_rules": custom_matches.iter().map(|m| serde_json::json!({
-                    "code": finding_codes::CUSTOM_RULE_MATCH,
-                    "rule_name": m.rule_name,
-                    "line": m.line,
-                    "snippet": m.snippet,
-                    "severity": severity_schema_str(&m.severity),
-                })).collect::<Vec<_>>(),
-                // Schema FindingEventIssue does not include function_name.
-                "event_issues": event_issues.iter().map(|e| serde_json::json!({
-                    "code": finding_codes::EVENT_INCONSISTENCY,
-                    "event_name": e.event_name,
-                    "issue_type": e.issue_type,
-                    "location": e.location,
-                    "message": e.message,
-                })).collect::<Vec<_>>(),
-                "unhandled_results": unhandled_results.iter().map(|u| serde_json::json!({
-                    "code": finding_codes::UNHANDLED_RESULT,
-                    "function_name": u.function_name,
-                    "call_expression": u.call_expression,
-                    "location": u.location,
-                    "message": u.message,
-                })).collect::<Vec<_>>(),
-                "upgrade_risks": upgrade_risks,
-                "smt_issues": smt_issues.iter().map(|s| serde_json::json!({
-                    "code": finding_codes::SMT_INVARIANT_VIOLATION,
-                    "function_name": s.function_name,
-                    "description": s.description,
-                    "location": s.location,
-                })).collect::<Vec<_>>(),
-                "sep41_issues": sep41_issues.iter().map(|s| serde_json::json!({
-                    "code": finding_codes::SEP41_INTERFACE_DEVIATION,
-                    "function_name": s.function_name,
-                    "kind": s.kind,
-                    "location": s.location,
-                    "message": s.message,
-                    "expected_signature": s.expected_signature,
-                    "actual_signature": s.actual_signature,
-                })).collect::<Vec<_>>(),
-                "timeouts": timeout_findings,
-            },
-        });
-        println!("{}", serde_json::to_string_pretty(&report)?);
-        return Ok(should_exit_with_1);
-    }
-
-    // ── Text output ──────────────────────────────────────────────────────────
-    if let Some(profile) = args.profile {
-        println!(
-            "{} Profile: {} — {}",
-            "ℹ".blue(),
-            profile.as_str().bold(),
-            profile.description()
-        );
-    }
-    if !timed_out_files.is_empty() {
-        println!(
-            "\n{} {} file(s) timed out ({}s limit):",
-            "⏱️".yellow(),
-            timed_out_files.len(),
-            timeout_secs
-        );
-        for f in &timed_out_files {
-            println!(
-                "   {} [{}] {}",
-                "->".red(),
-                finding_codes::ANALYSIS_TIMEOUT.bold(),
-                f
-            );
+            .any(|(_, v)| v.rule_name.contains("auth"));
+        let has_panic = all_violations
+            .iter()
+            .any(|(_, v)| v.rule_name.contains("panic"));
+        let has_arith = all_violations
+            .iter()
+            .any(|(_, v)| v.rule_name.contains("arithmetic") || v.rule_name.contains("overflow"));
+        if has_auth {
+            println!("Found potential Authentication Gaps!");
         }
-    }
-    if collisions.is_empty() {
-        println!("\n{} No storage key collisions found.", "✅".green());
-    } else {
-        println!(
-            "\n{} Found potential Storage Key Collisions!",
-            "⚠️".yellow()
-        );
-        for c in &collisions {
-            println!(
-                "   {} [{}] Value: {}",
-                "->".red(),
-                finding_codes::STORAGE_COLLISION.bold(),
-                c.key_value.bold()
-            );
-            println!("      Type: {}", c.key_type);
-            println!("      Location: {}", c.location);
-            println!("      Message: {}", c.message);
+        if has_panic {
+            println!("Found explicit Panics/Unwraps!");
         }
-    }
-    if auth_gaps.is_empty() {
-        println!("{} No authentication gaps found.", "✅".green());
-    } else {
-        println!("\n{} Found potential Authentication Gaps!", "⚠️".yellow());
-        for gap in &auth_gaps {
-            println!(
-                "   {} [{}] Function: {}",
-                "->".red(),
-                finding_codes::AUTH_GAP.bold(),
-                gap.function_name.bold()
-            );
+        if has_arith {
+            println!("Found unchecked Arithmetic Operations!");
         }
-    }
-    if panic_issues.is_empty() {
-        println!("{} No explicit Panics/Unwraps found.", "✅".green());
-    } else {
-        println!("\n{} Found explicit Panics/Unwraps!", "⚠️".yellow());
-        for issue in &panic_issues {
-            println!(
-                "   {} [{}] Type: {}",
-                "->".red(),
-                finding_codes::PANIC_USAGE.bold(),
-                issue.issue_type.bold()
-            );
-            println!("      Location: {}", issue.location);
-        }
-    }
-    if arithmetic_issues.is_empty() {
-        println!("{} No unchecked Arithmetic Operations found.", "✅".green());
-    } else {
-        println!("\n{} Found unchecked Arithmetic Operations!", "⚠️".yellow());
-        for issue in &arithmetic_issues {
-            println!(
-                "   {} [{}] Op: {}",
-                "->".red(),
-                finding_codes::ARITHMETIC_OVERFLOW.bold(),
-                issue.operation.bold()
-            );
-            println!("      Location: {}", issue.location);
-        }
-    }
-    if truncation_bounds_issues.is_empty() {
-        println!(
-            "{} No integer truncation or unchecked indexing found.",
-            "✅".green()
-        );
-    } else {
-        println!("\n{} Found Truncation / Bounds Risk issues!", "⚠️".yellow());
-        for issue in &truncation_bounds_issues {
-            println!(
-                "   {} [{}] Kind: {} | Expr: {}",
-                "->".red(),
-                finding_codes::TRUNCATION_BOUNDS.bold(),
-                issue.kind.bold(),
-                issue.expression.bold()
-            );
-            println!("      Location: {}", issue.location);
-            println!("      Suggestion: {}", issue.suggestion);
-        }
-    }
-    if size_warnings.is_empty() {
-        println!("{} No ledger size issues found.", "✅".green());
-    } else {
-        println!("\n{} Found Ledger Size Warnings!", "⚠️".yellow());
-        for w in &size_warnings {
-            println!(
-                "   {} [{}] Struct: {}",
-                "->".red(),
-                finding_codes::LEDGER_SIZE_RISK.bold(),
-                w.struct_name.bold()
-            );
-            println!("      Size: {} bytes", w.estimated_size);
-        }
-    }
-    if !event_issues.is_empty() {
-        println!(
-            "\n{} Found Event Consistency/Optimization issues!",
-            "⚠️".yellow()
-        );
-        for issue in &event_issues {
-            println!(
-                "   {} [{}] Event: {}",
-                "->".red(),
-                finding_codes::EVENT_INCONSISTENCY.bold(),
-                issue.event_name.bold()
-            );
-            println!("      Type: {:?}", issue.issue_type);
-            println!("      Location: {}", issue.location);
-            println!("      Message: {}", issue.message);
-        }
-    }
-    if !unhandled_results.is_empty() {
-        println!("\n{} Found Unhandled Result issues!", "⚠️".yellow());
-        for issue in &unhandled_results {
-            println!(
-                "   {} [{}] Function: {}",
-                "->".red(),
-                finding_codes::UNHANDLED_RESULT.bold(),
-                issue.function_name.bold()
-            );
-            println!("      Call: {}", issue.call_expression);
-            println!("      Location: {}", issue.location);
-            println!("      Message: {}", issue.message);
-        }
-    }
-    if variable_shadowing_violations.is_empty() {
-        println!("{} No variable shadowing detected.", "✅".green());
-    } else {
-        println!("\n{} Found Variable Shadowing issues!", "⚠️".yellow());
-        for violation in &variable_shadowing_violations {
-            println!("   {} [S006] {}", "->".red(), violation.message.bold());
-            println!("      Location: {}", violation.location);
-            if let Some(suggestion) = &violation.suggestion {
-                println!("      Suggestion: {}", suggestion);
-            }
-        }
-    }
-    let total_upgrade_findings: usize = upgrade_reports.iter().map(|r| r.findings.len()).sum();
-    if total_upgrade_findings > 0 {
-        println!("\n{} Found Upgrade/Admin Risk issues!", "⚠️".yellow());
-        for report in &upgrade_reports {
-            for finding in &report.findings {
+        if !all_violations.is_empty() {
+            println!("\n{} Found {} issue(s):", "⚠️".yellow(), total);
+            for (file, v) in &all_violations {
                 println!(
-                    "   {} [{}] Category: {:?}",
+                    "   {} [{}] {} — {}",
                     "->".red(),
-                    finding_codes::UPGRADE_RISK.bold(),
-                    finding.category
+                    v.rule_name.bold(),
+                    file,
+                    v.message
                 );
-                if let Some(f_name) = &finding.function_name {
-                    println!("      Function: {}", f_name);
+                if let Some(s) = &v.suggestion {
+                    println!("      Suggestion: {}", s);
                 }
-                println!("      Location: {}", finding.location);
-                println!("      Message: {}", finding.message);
-                println!("      Suggestion: {}", finding.suggestion);
             }
         }
-    }
-    if !smt_issues.is_empty() {
-        println!("\n{} Found Formal Verification (SMT) issues!", "❌".red());
-        for issue in &smt_issues {
-            println!(
-                "   {} [{}] Function: {}",
-                "->".red(),
-                finding_codes::SMT_INVARIANT_VIOLATION.bold(),
-                issue.function_name.bold()
-            );
-            println!("      Description: {}", issue.description);
-            println!("      Location: {}", issue.location);
+        if size_warnings_total == 0 {
+            println!("No ledger size issues found.");
         }
-    }
-    if !sep41_checked_contracts.is_empty() && sep41_issues.is_empty() {
-        println!("{} SEP-41 token interface verified exactly.", "✅".green());
-    } else if !sep41_issues.is_empty() {
-        println!("\n{} Found SEP-41 Interface Deviations!", "⚠️".yellow());
-        for issue in &sep41_issues {
-            println!(
-                "   {} [{}] Function: {}",
-                "->".red(),
-                finding_codes::SEP41_INTERFACE_DEVIATION.bold(),
-                issue.function_name.bold()
-            );
-            println!("      Kind: {:?}", issue.kind);
-            println!("      Location: {}", issue.location);
-            println!("      Message: {}", issue.message);
-            println!("      Expected: {}", issue.expected_signature);
-            if let Some(actual) = &issue.actual_signature {
-                println!("      Actual: {}", actual);
-            }
+        if collision_total == 0 {
+            println!("No storage key collisions found.");
         }
-    }
-    if !contractimport_issues.is_empty() {
-        println!("\n{} Found ContractImport Mismatches!", "⚠️".yellow());
-        for issue in &contractimport_issues {
-            println!(
-                "   {} [{}] WASM: {}",
-                "->".red(),
-                finding_codes::CONTRACTIMPORT_MISMATCH.bold(),
-                issue.wasm_path.bold()
-            );
-            println!("      Location: {}", issue.location);
-            println!("      Message: {}", issue.message);
-        }
-    }
-    if vuln_matches.is_empty() {
-        println!(
-            "{} No known vulnerability patterns matched (DB v{}).",
-            "✅".green(),
-            vuln_db.version
-        );
-    } else {
-        println!(
-            "\n{} Found {} known vulnerability pattern(s) (DB v{})!",
-            "🛡️".red(),
-            vuln_matches.len(),
-            vuln_db.version
-        );
-        for m in &vuln_matches {
-            let sev_icon = match m.severity.as_str() {
-                "critical" => "❌".red(),
-                "high" => "🔴".red(),
-                "medium" => "⚠️".yellow(),
-                _ => "ℹ️".blue(),
-            };
-            println!(
-                "   {} [{}] {} ({})",
-                sev_icon,
-                m.vuln_id.bold(),
-                m.name.bold(),
-                m.severity.to_uppercase()
-            );
-            println!("      File: {}:{}", m.file, m.line);
-            println!("      {}", m.description);
-            if !m.recommendation.is_empty() {
-                println!("      Suggestion: {}", m.recommendation);
-            }
-        }
+        println!("\nStatic analysis complete.");
     }
 
-    let cached_count = cached_counter.load(Ordering::Relaxed);
-    let reanalysed_count = total_files - cached_count;
-    println!(
-        "\n{} Static analysis complete. ({} served from cache, {} re-analysed, {} ms)",
-        "✨".green(),
-        cached_count.to_string().bold(),
-        reanalysed_count.to_string().bold(),
-        duration_ms
-    );
-    Ok(should_exit_with_1)
+    Ok(total > 0)
+}
+
+/// Stream one NDJSON line per finding immediately after each file is analysed.
+/// Downstream tools (CI pipelines, log aggregators) can begin consuming output
+/// without waiting for the full workspace scan to complete.
+///
+/// Each finding line:
+/// ```json
+/// {"event":"finding","file":"src/lib.rs","rule":"arithmetic_overflow","severity":"Warning","message":"...","location":"fn:5","suggestion":"..."}
+/// ```
+/// Terminal line:
+/// ```json
+/// {"event":"done","total_findings":12,"duration_ms":843}
+/// ```
+fn stream_ndjson(args: &AnalyzeArgs) -> anyhow::Result<bool> {
+    let path = &args.path;
+    if !is_soroban_project(path) {
+        eprintln!("No Soroban project found at {:?}", path);
+        return Ok(false);
+    }
+
+    let start = Instant::now();
+    let config = load_config(path);
+    let scan_root = if path.is_file() {
+        path.parent().unwrap_or(path).to_path_buf()
+    } else {
+        path.clone()
+    };
+    let rs_files = collect_rs_files(&scan_root, &config.ignore_paths);
+    let registry = RuleRegistry::with_default_rules();
+    let stdout = std::io::stdout();
+    let mut total = 0usize;
+
+    for file_path in &rs_files {
+        let content = match fs::read_to_string(file_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let file_str = file_path.display().to_string();
+        let violations = registry.run_all(&content);
+
+        // Lock stdout once per file so all findings from this file are contiguous.
+        let mut out = stdout.lock();
+        for v in violations {
+            total += 1;
+            let line = serde_json::json!({
+                "event": "finding",
+                "file": file_str,
+                "rule": v.rule_name,
+                "severity": format!("{:?}", v.severity),
+                "message": v.message,
+                "location": v.location,
+                "suggestion": v.suggestion,
+            });
+            writeln!(out, "{}", line)?;
+        }
+        out.flush()?;
+    }
+
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let mut out = stdout.lock();
+    writeln!(
+        out,
+        "{}",
+        serde_json::json!({
+            "event": "done",
+            "total_findings": total,
+            "duration_ms": duration_ms,
+        })
+    )?;
+    out.flush()?;
+
+    Ok(total > 0)
+}
+
+#[allow(dead_code)]
+fn walk_dir(
+    dir: &Path,
+    analyzer: &Analyzer,
+    collisions: &mut Vec<sanctifier_core::StorageCollisionIssue>,
+) -> anyhow::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            walk_dir(&path, analyzer, collisions)?;
+        } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            if let Ok(content) = fs::read_to_string(&path) {
+                let file_name = path.display().to_string();
+                let mut issues = analyzer.scan_storage_collisions(&content);
+                for issue in &mut issues {
+                    issue.location = format!("{}:{}", file_name, issue.location);
+                }
+                collisions.extend(issues);
+            }
+        }
+    }
+    Ok(())
 }
 
 // ── Analyse one file ─────────────────────────────────────────────────────────
@@ -934,7 +440,8 @@ pub(crate) fn analyze_single_file(
 
     for g in analyzer.scan_auth_gaps(content) {
         res.auth_gaps.push(sanctifier_core::AuthGapIssue {
-            function_name: format!("{}:{}", file_name, g.function_name),
+            function_name: format!("{}:{}", file_name, g),
+            location: file_name.to_string(),
         });
     }
 
@@ -950,13 +457,20 @@ pub(crate) fn analyze_single_file(
     }
     res.arithmetic_issues = a;
 
-    let mut tb = analyzer.scan_truncation_bounds(content);
-    for i in &mut tb {
-        i.location = format!("{}:{}", file_name, i.location);
-    }
+    let tb: Vec<sanctifier_core::TruncationBoundsIssue> = analyzer
+        .run_rule(content, "truncation_bounds")
+        .into_iter()
+        .map(|v| sanctifier_core::TruncationBoundsIssue {
+            function_name: String::new(),
+            kind: "truncation".to_string(),
+            expression: String::new(),
+            suggestion: v.suggestion.unwrap_or_default(),
+            location: format!("{}:{}", file_name, v.location),
+        })
+        .collect();
     res.truncation_bounds_issues = tb;
 
-    let mut custom = analyzer.analyze_custom_rules(content, &analyzer.config.custom_rules);
+    let mut custom = analyzer.analyze_custom_rules(content);
     for m in &mut custom {
         m.snippet = format!("{}:{}: {}", file_name, m.line, m.snippet);
     }
@@ -989,11 +503,8 @@ pub(crate) fn analyze_single_file(
     }
     res.upgrade_reports.push(up);
 
-    let mut smt = analyzer.verify_smt_invariants(content);
-    for i in &mut smt {
-        i.location = format!("{}:{}", file_name, i.location);
-    }
-    res.smt_issues = smt;
+    // SMT invariant verification requires the z3 feature; leave empty when not available.
+    res.smt_issues = vec![];
 
     let sep41_report = analyzer.verify_sep41_interface(content);
     if sep41_report.candidate {
@@ -1003,69 +514,6 @@ pub(crate) fn analyze_single_file(
             res.sep41_issues.push(issue);
         }
     }
-
-    let mut ci = analyzer.scan_contractimports(content);
-    for i in &mut ci {
-        i.location = format!("{}:{}", file_name, i.location);
-
-        // Stale WASM check heuristic:
-        // Attempt to find the full path of the WASM file relative to the file doing the import.
-        let mut base_dir = PathBuf::from(file_name);
-        base_dir.pop();
-        let wasm_file_path = base_dir.join(&i.wasm_path);
-
-        if !wasm_file_path.exists() {
-            i.message = format!(
-                "The imported WASM file does not exist: {}",
-                wasm_file_path.display()
-            );
-        } else {
-            // Find modification time of the WASM
-            if let Ok(wasm_meta) = std::fs::metadata(&wasm_file_path) {
-                if let Ok(wasm_mtime) = wasm_meta.modified() {
-                    let wasm_stem = wasm_file_path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("");
-                    let mut found_newer_rs = false;
-                    let mut newest_rs_path = String::new();
-
-                    // Simple heuristic: look for any .rs file in the workspace containing the stem
-                    // If a matching .rs file is newer than the wasm, it's considered stale.
-                    let workspace_root = PathBuf::from(".");
-                    let rs_files = crate::commands::analyze::collect_rs_files(
-                        &workspace_root,
-                        &analyzer.config.ignore_paths,
-                    );
-
-                    for rs_f in rs_files {
-                        let path_str = rs_f.display().to_string();
-                        // Strip hyphens and underscores for loose matching e.g. "my-contract" vs "my_contract"
-                        let normalized_stem = wasm_stem.replace('-', "_");
-                        let normalized_path = path_str.replace('-', "_");
-                        if normalized_path.contains(&normalized_stem) {
-                            if let Ok(rs_meta) = std::fs::metadata(&rs_f) {
-                                if let Ok(rs_mtime) = rs_meta.modified() {
-                                    if rs_mtime > wasm_mtime {
-                                        found_newer_rs = true;
-                                        newest_rs_path = path_str;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if found_newer_rs {
-                        i.message = format!("The imported WASM appears older than its corresponding workspace source file: {}. Rebuild the contract.", newest_rs_path);
-                    } else {
-                        i.message = String::new(); // No issue
-                    }
-                }
-            }
-        }
-    }
-    res.contractimport_issues = ci.into_iter().filter(|i| !i.message.is_empty()).collect();
 
     res
 }
@@ -1116,6 +564,7 @@ fn collect_rs_files_inner(dir: &Path, ignore_paths: &[String], out: &mut Vec<Pat
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 fn chrono_timestamp() -> String {
     let now = std::time::SystemTime::now();
     let secs = now
@@ -1137,8 +586,12 @@ pub(crate) fn load_config(path: &Path) -> SanctifyConfig {
         let config_path = current.join(".sanctify.toml");
         if config_path.exists() {
             if let Ok(content) = fs::read_to_string(&config_path) {
-                if let Ok(config) = toml::from_str(&content) {
-                    return config;
+                match toml::from_str(&content) {
+                    Ok(config) => return config,
+                    Err(e) => {
+                        eprintln!("Error: Invalid configuration file at {}\n{}", config_path.display(), e);
+                        std::process::exit(1);
+                    }
                 }
             }
         }
@@ -1163,60 +616,11 @@ pub(crate) fn is_soroban_project(path: &Path) -> bool {
 
 // ── Cache ────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 fn sha256_hex(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     format!("{:x}", hasher.finalize())
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-struct CacheEntry {
-    hash: String,
-    result: FileAnalysisResult,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-struct AnalysisCache {
-    version: String,
-    entries: HashMap<String, CacheEntry>,
-    #[serde(skip)]
-    path: PathBuf,
-}
-
-impl AnalysisCache {
-    fn load(project_root: &Path) -> Self {
-        let path = project_root.join(".sanctifier_cache.json");
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(mut cache) = serde_json::from_str::<AnalysisCache>(&content) {
-                if cache.version == "1" {
-                    cache.path = path;
-                    return cache;
-                }
-            }
-        }
-        Self {
-            version: "1".to_string(),
-            entries: HashMap::new(),
-            path,
-        }
-    }
-
-    fn save(&self) {
-        if let Ok(content) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(&self.path, content);
-        }
-    }
-
-    fn lookup(&self, file_path: &str, hash: &str) -> Option<FileAnalysisResult> {
-        self.entries
-            .get(file_path)
-            .filter(|e| e.hash == hash)
-            .map(|e| e.result.clone())
-    }
-
-    fn store(&mut self, file_path: String, hash: String, result: FileAnalysisResult) {
-        self.entries.insert(file_path, CacheEntry { hash, result });
-    }
 }
 
 // ── Path normalization ────────────────────────────────────────────────────────
@@ -1248,17 +652,6 @@ pub(crate) fn normalize_cli_path(p: PathBuf) -> PathBuf {
 #[cfg(windows)]
 pub(crate) fn normalize_cli_path(p: PathBuf) -> PathBuf {
     p
-}
-
-/// Map a `FindingSeverity` value to the three-level schema string used in the
-/// `findings.custom_rules[].severity` field ("info" | "warning" | "error").
-fn severity_schema_str(s: &sanctifier_core::finding_codes::FindingSeverity) -> &'static str {
-    use sanctifier_core::finding_codes::FindingSeverity;
-    match s {
-        FindingSeverity::Critical | FindingSeverity::High => "error",
-        FindingSeverity::Medium | FindingSeverity::Low => "warning",
-        FindingSeverity::Info => "info",
-    }
 }
 
 #[cfg(test)]

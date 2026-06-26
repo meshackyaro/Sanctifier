@@ -2,4 +2,5 @@
 
 pub mod commands;
 pub mod logging;
+pub mod telemetry;
 pub mod vulndb;

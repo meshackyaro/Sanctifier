@@ -391,7 +391,7 @@ impl SmtLatencyBenchmarkReport {
     /// Return strategies ordered by descending average latency.
     pub fn most_expensive_first(&self) -> Vec<SmtStrategyLatency> {
         let mut sorted = self.strategies.clone();
-        sorted.sort_by(|a, b| b.avg_micros.cmp(&a.avg_micros));
+        sorted.sort_by_key(|k| std::cmp::Reverse(k.avg_micros));
         sorted
     }
 }

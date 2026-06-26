@@ -14,22 +14,15 @@
 
 use insta::with_settings;
 use sanctifier_core::rules::{
-    arithmetic_overflow::ArithmeticOverflowRule,
-    auth_gap::AuthGapRule,
-    instance_storage_misuse::InstanceStorageMisuseRule,
-    ledger_size::LedgerSizeRule,
-    missing_state_event::MissingStateEventRule,
-    panic_detection::PanicDetectionRule,
-    reentrancy::ReentrancyRule,
-    shadow_storage::ShadowStorageRule,
+    arithmetic_overflow::ArithmeticOverflowRule, auth_gap::AuthGapRule,
+    instance_storage_misuse::InstanceStorageMisuseRule, ledger_size::LedgerSizeRule,
+    missing_state_event::MissingStateEventRule, panic_detection::PanicDetectionRule,
+    reentrancy::ReentrancyRule, shadow_storage::ShadowStorageRule,
     storage_update_state_check::StorageUpdateStateCheckRule,
-    truncation_bounds::TruncationBoundsRule,
-    unchecked_external_call::UncheckedExternalCallRule,
-    unhandled_result::UnhandledResultRule,
-    unsafe_prng::UnsafePrngRule,
-    unused_variable::UnusedVariableRule,
-    variable_shadowing::VariableShadowingRule,
-    Rule, RuleViolation,
+    truncation_bounds::TruncationBoundsRule, unchecked_external_call::UncheckedExternalCallRule,
+    unhandled_result::UnhandledResultRule, unsafe_prng::UnsafePrngRule,
+    unused_variable::UnusedVariableRule, variable_shadowing::VariableShadowingRule, Rule,
+    RuleViolation,
 };
 
 // ── Helper ────────────────────────────────────────────────────────────────────
@@ -84,7 +77,10 @@ fn sarif_panic_detection() {
     "#;
     let rule = PanicDetectionRule::new();
     let violations = rule.check(source);
-    assert!(!violations.is_empty(), "panic_detection must fire for unwrap");
+    assert!(
+        !violations.is_empty(),
+        "panic_detection must fire for unwrap"
+    );
     with_settings!({ sort_maps => true }, {
         insta::assert_json_snapshot!("panic_detection", violations_json(&violations));
     });
@@ -103,7 +99,10 @@ fn sarif_arithmetic_overflow() {
     "#;
     let rule = ArithmeticOverflowRule::new();
     let violations = rule.check(source);
-    assert!(!violations.is_empty(), "arithmetic_overflow must fire for bare +");
+    assert!(
+        !violations.is_empty(),
+        "arithmetic_overflow must fire for bare +"
+    );
     with_settings!({ sort_maps => true }, {
         insta::assert_json_snapshot!("arithmetic_overflow", violations_json(&violations));
     });
@@ -142,7 +141,10 @@ fn sarif_unhandled_result() {
     "#;
     let rule = UnhandledResultRule::new();
     let violations = rule.check(source);
-    assert!(!violations.is_empty(), "unhandled_result must fire for ignored try_*");
+    assert!(
+        !violations.is_empty(),
+        "unhandled_result must fire for ignored try_*"
+    );
     with_settings!({ sort_maps => true }, {
         insta::assert_json_snapshot!("unhandled_result", violations_json(&violations));
     });
@@ -205,7 +207,10 @@ fn sarif_unused_variable() {
     "#;
     let rule = UnusedVariableRule::new();
     let violations = rule.check(source);
-    assert!(!violations.is_empty(), "unused_variable must fire for 'extra'");
+    assert!(
+        !violations.is_empty(),
+        "unused_variable must fire for 'extra'"
+    );
     with_settings!({ sort_maps => true }, {
         insta::assert_json_snapshot!("unused_variable", violations_json(&violations));
     });
@@ -224,7 +229,10 @@ fn sarif_truncation_bounds() {
     "#;
     let rule = TruncationBoundsRule::new();
     let violations = rule.check(source);
-    assert!(!violations.is_empty(), "truncation_bounds must fire for i128 as u32");
+    assert!(
+        !violations.is_empty(),
+        "truncation_bounds must fire for i128 as u32"
+    );
     with_settings!({ sort_maps => true }, {
         insta::assert_json_snapshot!("truncation_bounds", violations_json(&violations));
     });

@@ -8,6 +8,7 @@ import { FindingsList } from "../components/FindingsList";
 import { SeverityFilter } from "../components/SeverityFilter";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { nextScanProgressPhase } from "../lib/scan-progress";
+import { getSettingsHeaders } from "../lib/settings";
 import type { Finding, Severity } from "../types";
 import Link from "next/link";
 
@@ -68,6 +69,7 @@ export default function ScanPage() {
       const response = await fetch("/api/analyze", {
         method: "POST",
         body: formData,
+        headers: getSettingsHeaders() as Record<string, string>,
       });
 
       clearInterval(logsTimer);

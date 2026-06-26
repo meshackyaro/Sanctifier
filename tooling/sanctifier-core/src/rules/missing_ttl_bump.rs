@@ -189,7 +189,10 @@ mod tests {
             }
         "#;
         let v = rule().check(source);
-        assert!(!v.is_empty(), "persistent write without TTL bump must be flagged");
+        assert!(
+            !v.is_empty(),
+            "persistent write without TTL bump must be flagged"
+        );
         assert!(v[0].message.contains("store"));
         assert_eq!(v[0].severity, Severity::Warning);
         assert!(v[0].suggestion.is_some());
@@ -205,7 +208,10 @@ mod tests {
             }
         "#;
         let v = rule().check(source);
-        assert!(!v.is_empty(), "temporary write without TTL bump must be flagged");
+        assert!(
+            !v.is_empty(),
+            "temporary write without TTL bump must be flagged"
+        );
     }
 
     #[test]

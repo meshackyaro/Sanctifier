@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Vulnerability database — loading, validation, and pattern matching.
 //!
 //! # Module layout

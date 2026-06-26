@@ -11,10 +11,7 @@ documentation = "https://docs.rs/sanctifier-cli"
 keywords = ["soroban", "stellar", "security", "cli", "analysis"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
-
-[features]
-default = []
-smt = ["sanctifier-core/smt"]
+authors = ["Sanctifier Contributors <maintainers@hypersafed.com>"]
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
@@ -39,13 +36,20 @@ notify-debouncer-mini = "0.4.1"
 warp = "0.3"
 tempfile = "3.8"
 md5 = "0.7"
+dialoguer = { version = "0.11", features = ["fuzzy-select"] }
+jsonschema = { version = "0.17", default-features = false }
+flate2 = "1.0"
+tar = "0.4"
+walkdir = "2.4"
+syn = { version = "2.0", features = ["full", "visit"] }
+quote = "1.0"
+
 
 [dev-dependencies]
 assert_cmd = "2.0"
 mockito = "1.6"
 predicates = "3.1"
 tempfile = "3.8"
-jsonschema = "0.18"
 
 [build-dependencies]
 regex = "1.10"

@@ -101,6 +101,15 @@
 - Security best practices and monitoring
 - Integration examples for contract developers
 
+### Live Testnet Status Widget
+
+**[LIVE_TESTNET.md](LIVE_TESTNET.md)** — deployed contract addresses and on-chain verification
+- Three live Soroban Testnet contracts with real-time status
+- Live widget available at `/` (home page) via the `TestnetStatusWidget` component
+  ([frontend/app/components/TestnetStatusWidget.tsx](frontend/app/components/TestnetStatusWidget.tsx))
+- API route: `GET /api/testnet-status` — polls Soroban RPC + Stellar Expert, cached 30 s
+- See also: [docs/soroban-deployment.md](docs/soroban-deployment.md) for re-deployment instructions
+
 ### Runtime Guard Wrapper Contract
 
 **[contracts/runtime-guard-wrapper/README.md](contracts/runtime-guard-wrapper/README.md)**
@@ -117,6 +126,17 @@
 - Security considerations
 - Integration examples
 - Troubleshooting
+
+### VS Code Extension
+
+**Location:** [`vscode-extension/`](vscode-extension/)
+
+- **API stability** — `activate()` returns a typed `SanctifierExtensionApi` (`version`, `getFindings(uri)`) that other extensions can consume via `vscode.extensions.getExtension(...).exports`
+- **`sanctifier.minSeverity`** — filter in-editor diagnostics to `error`, `warning` (default), or `information`
+- **`sanctifier.toggleEnable`** — toggle the extension on/off from the command palette or status bar click
+- **`sanctifier.showOutput`** — reveal the persistent output channel
+- **`sanctifier.analyzeWorkspace`** — run the CLI and stream results to the output channel (respects `minSeverity`)
+- Status bar item shows live finding count; click to toggle
 
 ### Sanctifier CLI Deploy Command
 

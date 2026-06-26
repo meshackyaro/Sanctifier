@@ -31,10 +31,10 @@ use wasm_bindgen::prelude::*;
 // ── Module declarations ────────────────────────────────────────────────────────
 
 mod analysis;
-pub mod constants;
+mod constants;
 mod converters;
-pub mod types;
-pub mod validation;
+mod types;
+mod validation;
 
 // Re-export the public API types so consumers can import them directly.
 pub use types::{

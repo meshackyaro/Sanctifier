@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { AnalysisTerminal } from "../components/AnalysisTerminal";
 import { FindingsList } from "../components/FindingsList";
 import { Play, RotateCcw, Save, Share2, Sparkles, Terminal, Copy, Check, Trash2, X } from "lucide-react";
 import type { Finding } from "../types";
+import { getSettingsHeaders } from "../lib/settings";
 
 const DEFAULT_CODE = `use soroban_sdk::{contract, contractimpl, Env, Symbol};
 
@@ -123,6 +124,14 @@ interface SavedSnippet {
 }
 
 export default function PlaygroundPage() {
+  return (
+    <Suspense fallback={null}>
+      <PlaygroundPageInner />
+    </Suspense>
+  );
+}
+
+function PlaygroundPageInner() {
   const [code, setCode] = useState(DEFAULT_CODE);
   const [logs, setLogs] = useState<string[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -221,6 +230,7 @@ export default function PlaygroundPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...getSettingsHeaders(),
         },
         body: JSON.stringify({ source: code }),
       });

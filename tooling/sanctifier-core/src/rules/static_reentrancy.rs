@@ -69,6 +69,7 @@ struct StaticReentrancyViolation {
     fn_name: String,
     line: usize,
     confidence: Confidence,
+    #[allow(dead_code)]
     call_kind: ExternalCallKind,
 }
 
@@ -129,7 +130,9 @@ impl Rule for StaticReentrancyRule {
                                     format!(
                                         "Function '{}': external call precedes storage mutation \
                                          at line {} without a reentrancy guard [confidence: {}]",
-                                        v.fn_name, v.line, confidence.as_str()
+                                        v.fn_name,
+                                        v.line,
+                                        confidence.as_str()
                                     ),
                                     format!("{}:{}", v.fn_name, v.line),
                                 )
@@ -203,17 +206,18 @@ fn scan_expr(expr: &syn::Expr, fn_name: &str, state: &mut FnCallState) {
             }
 
             // Detect storage mutations that follow an external call
-            if state.has_prior_external_call && !state.has_guard {
-                if is_storage_mutation(&method, &mc.receiver) {
-                    let span = mc.span();
-                    let call_kind = state.external_call_kind.unwrap();
-                    state.violations.push(StaticReentrancyViolation {
-                        fn_name: fn_name.to_string(),
-                        line: span.start().line,
-                        confidence: call_kind.confidence(),
-                        call_kind,
-                    });
-                }
+            if state.has_prior_external_call
+                && !state.has_guard
+                && is_storage_mutation(&method, &mc.receiver)
+            {
+                let span = mc.span();
+                let call_kind = state.external_call_kind.unwrap();
+                state.violations.push(StaticReentrancyViolation {
+                    fn_name: fn_name.to_string(),
+                    line: span.start().line,
+                    confidence: call_kind.confidence(),
+                    call_kind,
+                });
             }
 
             scan_expr(&mc.receiver, fn_name, state);
@@ -286,7 +290,10 @@ fn is_storage_mutation(method: &str, receiver: &syn::Expr) -> bool {
         return false;
     }
     let s = quote::quote!(#receiver).to_string();
-    s.contains("storage") || s.contains("persistent") || s.contains("temporary") || s.contains("instance")
+    s.contains("storage")
+        || s.contains("persistent")
+        || s.contains("temporary")
+        || s.contains("instance")
 }
 
 // ── Unit tests ─────────────────────────────────────────────────────────────────
@@ -312,7 +319,10 @@ mod tests {
             }
         "#;
         let v = rule().check(source);
-        assert!(!v.is_empty(), "invoke_contract before storage write must be flagged");
+        assert!(
+            !v.is_empty(),
+            "invoke_contract before storage write must be flagged"
+        );
         assert!(v[0].message.contains("unsafe_withdraw"));
         assert!(v[0].message.contains("high"));
     }
@@ -328,7 +338,10 @@ mod tests {
             }
         "#;
         let v = rule().check(source);
-        assert!(!v.is_empty(), "try_invoke_contract before write must be flagged");
+        assert!(
+            !v.is_empty(),
+            "try_invoke_contract before write must be flagged"
+        );
         assert!(v[0].message.contains("medium"));
     }
 
@@ -399,6 +412,9 @@ mod tests {
             }
         "#;
         let v = rule().check(source);
-        assert!(v.is_empty(), "external call without subsequent write must not be flagged");
+        assert!(
+            v.is_empty(),
+            "external call without subsequent write must not be flagged"
+        );
     }
 }
