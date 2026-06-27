@@ -89,6 +89,9 @@ pub struct AnalyzeArgs {
     /// Webhook endpoint(s) to notify when scan completes
     #[arg(long = "webhook-url")]
     pub webhook_urls: Vec<String>,
+    /// HMAC-SHA256 secret for signing webhook requests (#522)
+    #[arg(long = "webhook-secret")]
+    pub webhook_secret: Option<String>,
     /// Return non-zero exit code when findings meet or exceed severity threshold
     #[arg(long)]
     pub exit_code: bool,
@@ -234,7 +237,7 @@ pub(crate) fn run_analysis(args: AnalyzeArgs) -> anyhow::Result<bool> {
     // Notify webhooks (non-fatal)
     if !args.webhook_urls.is_empty() {
         use crate::commands::webhook::{
-            send_scan_completed_webhooks, ScanWebhookPayload, ScanWebhookSummary,
+            send_scan_completed_webhooks, ScanWebhookPayload, ScanWebhookSummary, WebhookConfig,
         };
         let payload = ScanWebhookPayload {
             event: "scan_completed",
@@ -254,7 +257,11 @@ pub(crate) fn run_analysis(args: AnalyzeArgs) -> anyhow::Result<bool> {
                     .any(|(_, v)| matches!(v.severity, sanctifier_core::Severity::Warning)),
             },
         };
-        let _ = send_scan_completed_webhooks(&args.webhook_urls, &payload);
+        let webhook_cfg = WebhookConfig {
+            secret: args.webhook_secret.clone(),
+            max_attempts: None,
+        };
+        let _ = send_scan_completed_webhooks(&args.webhook_urls, &payload, &webhook_cfg);
     }
 
     if args.format == "json" {

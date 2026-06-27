@@ -17,6 +17,7 @@ pub mod lsp;
 pub mod pr_comment;
 pub mod reentrancy;
 pub mod report;
+pub mod report_templates;
 pub mod sarif;
 pub mod serve;
 pub mod storage;
